@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en" data-routes='{"files":{{ url_for("get_files")|tojson }},"upload":{{ url_for("upload_file")|tojson }},"profile":{{ url_for("get_profile")|tojson }},"logout":{{ url_for("logout")|tojson }},"fileBase":"/api/files/","shares":{{ url_for("list_shares")|tojson }},"activity":{{ url_for("get_activity")|tojson }},"folders":"/api/folders"}'>
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SkySync Workspace</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
+</head>
+
+<body>
+  <div class="sidebar-overlay" id="sidebar-overlay"></div>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar" aria-hidden="true" aria-label="Sidebar navigation">
+      <div class="brand-block">
+        <div class="brand-mark">TD</div>
+        <div>
+          <div class="eyebrow">Telegram-backed storage</div>
+          <h1>SkySync</h1>
+        </div>
+        <button class="sidebar-close-btn" id="sidebar-close-btn" type="button" aria-label="Close sidebar">&times;</button>
+      </div>
+
+      <nav class="sidebar-nav" aria-label="Main navigation">
+        <button class="nav-item active" data-view="files" type="button">
+          <span class="nav-icon">&#128193;</span> All Files <span class="nav-count" id="nav-count-all">0</span>
+        </button>
+        <button class="nav-item" data-view="favorites" type="button">
+          <span class="nav-icon">&#9733;</span> Favorites <span class="nav-count" id="nav-count-favorites">0</span>
+        </button>
+        <button class="nav-item" data-view="recent" type="button">
+          <span class="nav-icon">&#128337;</span> Recent
+        </button>
+        <button class="nav-item" data-view="trash" type="button">
+          <span class="nav-icon">&#128465;</span> Trash <span class="nav-count" id="nav-count-trash">0</span>
+        </button>
+      </nav>
+
+      <section class="panel storage-panel" id="storage-panel">
+        <div class="panel-title-row">
+          <h2>Storage</h2>
+          <span class="chip neutral" id="storage-target-chip">Telegram</span>
+        </div>
+        <div class="storage-number" id="storage-total">0 B</div>
+        <div class="storage-caption" id="storage-caption">No files uploaded yet</div>
+        <div class="meter">
+          <div class="meter-bar" id="storage-meter"></div>
+        </div>
+        <div class="mini-stats">
+          <div><span class="mini-label">Images</span><strong id="stat-images">0</strong></div>
+          <div><span class="mini-label">Videos</span><strong id="stat-videos">0</strong></div>
+          <div><span class="mini-label">Docs</span><strong id="stat-documents">0</strong></div>
+          <div><span class="mini-label">Audio</span><strong id="stat-audio">0</strong></div>
+        </div>
+      </section>
+
+      <section class="panel user-panel">
+        <div class="avatar" id="profile-avatar">TD</div>
+        <div class="user-copy">
+          <div class="user-name" id="profile-name">Workspace</div>
+          <div class="user-meta" id="profile-meta">Loading...</div>
+        </div>
+        <button class="edit-name-btn" id="edit-profile-btn" type="button" title="Edit profile" aria-label="Edit profile">&#9998;</button>
+      </section>
+
+      <div class="sidebar-footer">
+        <a class="nav-item" href="{{ url_for('logout') }}" id="logout-link">
+          <span class="nav-icon">&#10140;</span> Logout
+        </a>
+      </div>
+    </aside>
+
+    <main class="main-panel">
+      <header class="dashboard-header">
+        <div class="header-left">
+          <button class="mobile-menu-btn" id="mobile-menu-btn" type="button" aria-label="Open navigation menu" aria-expanded="false" aria-controls="sidebar">&#9776;</button>
+          <div>
+            <h2 id="greeting-text">Welcome</h2>
+            <p id="hero-subtitle" class="header-subtitle">Here's what's happening with your storage.</p>
+          </div>
+        </div>
+        <div class="header-badges">
+          <span class="chip success" id="auth-mode-chip">Local account</span>
+          <span class="chip neutral" id="hero-login-time">Session active</span>
+        </div>
+      </header>
+
+      <section class="stats-row" id="stats-row">
+        <div class="stat-card">
+          <div class="stat-number" id="stat-total-files">0</div>
+          <div class="stat-label">Total Files</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number" id="stat-total-size">0 B</div>
+          <div class="stat-label">Storage Used</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number" id="stat-total-images">0</div>
+          <div class="stat-label">Images</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number" id="stat-total-videos">0</div>
+          <div class="stat-label">Videos</div>
+        </div>
+      </section>
+
+      <section class="toolbar panel">
+        <div class="toolbar-row">
+          <label class="search-box">
+            <span>Search</span>
+            <input type="text" id="search-input" placeholder="Search by filename, type, or extension..." aria-label="Search files">
+          </label>
+          <label class="sort-box">
+            <span>Sort</span>
+            <select id="sort-select" aria-label="Sort files">
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+              <option value="name">Name A-Z</option>
+              <option value="size">Largest first</option>
+            </select>
+          </label>
+          <div class="view-toggle" id="view-toggle">
+            <button class="toggle-btn active" data-view="grid" type="button" aria-label="Grid view">Grid</button>
+            <button class="toggle-btn" data-view="list" type="button" aria-label="List view">List</button>
+          </div>
+        </div>
+        <div class="toolbar-row compact">
+          <div class="dropzone" id="upload-dropzone" role="button" tabindex="0" aria-label="Drop files here to upload">
+            <strong>Drop files here</strong>
+            <span>or click Upload for multiple files</span>
+            <span class="upload-hint" id="upload-hint" hidden>Uploading to: root</span>
+          </div>
+          <div class="toolbar-actions">
+            <button class="soft-btn" id="new-folder-btn" type="button">+ Folder</button>
+            <button class="primary-btn" id="toolbar-upload-btn" type="button">Upload</button>
+            <button class="soft-btn" id="refresh-btn" type="button">Refresh</button>
+            <button class="soft-btn" id="clear-search-btn" type="button">Clear</button>
+          </div>
+        </div>
+        <div class="breadcrumb" id="breadcrumb" style="display:none" role="navigation" aria-label="Folder navigation"></div>
+        <div class="folder-bar" id="folder-bar" style="display:none">
+          <button class="soft-btn small" id="folder-back-btn" type="button">&#8592; Back</button>
+          <button class="soft-btn small" id="folder-home-btn" type="button">&#8962; Home</button>
+          <span class="folder-bar-title" id="folder-bar-title"></span>
+        </div>
+        <input type="file" id="file-input" multiple hidden aria-hidden="true">
+      </section>
+
+      <section class="status-strip" id="status-strip">
+        <div>
+          <strong id="section-title">All files</strong>
+          <span id="section-subtitle">Preparing your workspace...</span>
+        </div>
+        <div class="selection-strip" id="selection-strip" hidden>
+          <span id="selection-count">0 selected</span>
+          <button class="text-btn" id="bulk-favorite-btn" type="button">Favorite</button>
+          <button class="text-btn" id="bulk-delete-btn" type="button">Delete</button>
+          <button class="text-btn" id="clear-selection-btn" type="button">Clear</button>
+        </div>
+      </section>
+
+      <section class="content-panel panel">
+        <div class="banner" id="inline-banner" hidden></div>
+        <div class="loading-state" id="loading-state" role="status" aria-live="polite">
+          <div class="spinner"></div>
+          <p>Loading your files...</p>
+        </div>
+        <div class="skeleton-grid" id="skeleton-grid" hidden aria-hidden="true"></div>
+        <div class="empty-state" id="empty-state" hidden>
+          <div class="empty-icon" id="empty-icon">&#43;</div>
+          <h3 id="empty-title">No files here yet</h3>
+          <p id="empty-message">Upload your first file to get started.</p>
+          <div class="empty-actions" id="empty-actions"></div>
+        </div>
+        <div class="files-grid" id="files-grid" role="list" aria-label="Files and folders"></div>
+        <div class="pagination" id="pagination" hidden role="navigation" aria-label="Pagination"></div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Upload Progress Panel -->
+  <div class="upload-panel" id="upload-panel" hidden role="status" aria-label="Upload progress">
+    <div class="upload-panel-header">
+      <strong>Uploading</strong>
+      <button class="text-btn" id="upload-panel-close" type="button" aria-label="Close upload panel">&times;</button>
+    </div>
+    <div class="upload-list" id="upload-list"></div>
+  </div>
+
+  <!-- Preview Modal -->
+  <div class="modal-backdrop" id="preview-modal" hidden role="dialog" aria-modal="true" aria-label="File preview">
+    <div class="modal-card preview-card">
+      <button class="modal-close" data-close-modal="preview-modal" type="button" aria-label="Close preview">&times;</button>
+      <div id="preview-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- Rename Modal -->
+  <div class="modal-backdrop" id="rename-modal" hidden role="dialog" aria-modal="true" aria-label="Rename file">
+    <div class="modal-card compact-card">
+      <div class="modal-heading">
+        <h3>Rename file</h3>
+        <p>Update the display name stored in SkySync.</p>
+      </div>
+      <form id="rename-form">
+        <input id="rename-input" type="text" maxlength="200" required aria-label="New file name">
+        <div class="modal-actions">
+          <button class="soft-btn" data-close-modal="rename-modal" type="button">Cancel</button>
+          <button class="primary-btn" type="submit">Save name</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Share Modal -->
+  <div class="modal-backdrop" id="share-modal" hidden role="dialog" aria-modal="true" aria-label="Share file">
+    <div class="modal-card compact-card">
+      <div class="modal-heading">
+        <h3>Share file</h3>
+        <p>Create a secure link to share this file.</p>
+      </div>
+      <form id="share-form">
+        <div class="form-group">
+          <label>Expires after</label>
+          <select id="share-expiry" aria-label="Share expiry">
+            <option value="">Never</option>
+            <option value="1">1 day</option>
+            <option value="7">7 days</option>
+            <option value="30">30 days</option>
+            <option value="90">90 days</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="share-can-download"> Allow download
+          </label>
+        </div>
+        <div class="share-result" id="share-result" hidden>
+          <input type="text" id="share-url-input" readonly aria-label="Share URL">
+          <button type="button" class="primary-btn" id="copy-share-btn">Copy</button>
+        </div>
+        <div class="modal-actions">
+          <button class="soft-btn" data-close-modal="share-modal" type="button">Close</button>
+          <button class="primary-btn" type="submit" id="create-share-btn">Create link</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Name Modal -->
+  <div class="modal-backdrop" id="name-modal" hidden role="dialog" aria-modal="true" aria-label="Set display name">
+    <div class="modal-card compact-card">
+      <div class="modal-heading">
+        <h3>Welcome to SkySync</h3>
+        <p>Set a display name so your profile is easy to recognize.</p>
+      </div>
+      <form id="name-form" novalidate>
+        <input id="name-input" type="text" maxlength="80" placeholder="Your name" required autocomplete="name" aria-label="Your name">
+        <div class="modal-actions">
+          <button class="primary-btn" type="submit" id="name-save-btn">Save name</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Edit Name Modal -->
+  <div class="modal-backdrop" id="edit-name-modal" hidden role="dialog" aria-modal="true" aria-label="Edit profile">
+    <div class="modal-card compact-card">
+      <div class="modal-heading">
+        <h3>Edit profile</h3>
+        <p>Update your display name.</p>
+      </div>
+      <form id="edit-name-form" novalidate>
+        <input id="edit-name-input" type="text" maxlength="80" placeholder="Your name" required autocomplete="name" aria-label="Display name">
+        <div class="modal-actions">
+          <button class="soft-btn" data-close-modal="edit-name-modal" type="button">Cancel</button>
+          <button class="primary-btn" type="submit" id="edit-name-save-btn">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Context Menu -->
+  <div class="context-menu" id="context-menu" hidden role="menu" aria-label="File actions">
+    <button class="ctx-item" data-action="preview" role="menuitem">&#128269; Preview</button>
+    <button class="ctx-item" data-action="download" role="menuitem">&#11015; Download</button>
+    <button class="ctx-item" data-action="rename" role="menuitem">&#9998; Rename</button>
+    <button class="ctx-item" data-action="share" role="menuitem">&#128279; Share</button>
+    <button class="ctx-item" data-action="favorite" role="menuitem">&#9733; Favorite</button>
+    <button class="ctx-item" data-action="move" role="menuitem">&#128194; Move to Folder</button>
+    <hr class="ctx-divider">
+    <button class="ctx-item danger" data-action="delete" role="menuitem">&#128465; Delete</button>
+  </div>
+
+  <!-- Move to Folder Modal -->
+  <div class="modal-backdrop" id="modal-move" hidden role="dialog" aria-modal="true" aria-label="Move file to folder">
+    <div class="modal-card compact-card">
+      <div class="modal-heading">
+        <h3>Move to Folder</h3>
+        <p>Select a destination folder.</p>
+      </div>
+      <div id="move-folder-list" class="move-folder-list">
+        <button class="move-folder-item active" data-folder-id="null" role="option" aria-selected="true">&#127968; Root</button>
+      </div>
+      <div class="modal-actions">
+        <button class="soft-btn" id="move-cancel-btn" type="button">Cancel</button>
+        <button class="primary-btn" id="move-confirm-btn" type="button">Move</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Download indicator -->
+  <div class="download-indicator" id="download-indicator" hidden role="status" aria-label="Download progress">
+    <div class="spinner"></div>
+    <div class="download-indicator-text" id="download-indicator-text">Preparing file...</div>
+  </div>
+
+  <div class="toast-stack" id="toast-stack" role="status" aria-live="polite"></div>
+
+  <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+</body>
+
+</html>

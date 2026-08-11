@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ title }} - SkySync</title>
+  <style>
+    :root {
+      --bg-primary: #07141f;
+      --bg-secondary: #0e2433;
+      --bg-card: rgba(14, 36, 51, 0.85);
+      --text-primary: #e2e8f0;
+      --text-secondary: #94a3b8;
+      --teal: #34d399;
+      --orange: #ff9f43;
+      --border: rgba(52, 211, 153, 0.15);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: linear-gradient(135deg, var(--bg-primary) 0%, #0a1a2a 50%, #0d2233 100%);
+      color: var(--text-primary);
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      line-height: 1.7;
+      min-height: 100vh;
+    }
+    .header {
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border);
+      padding: 20px 0;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      backdrop-filter: blur(20px);
+    }
+    .header-inner {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 0 24px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .brand {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--teal);
+      text-decoration: none;
+    }
+    .brand span { color: var(--orange); }
+    .nav-links {
+      display: flex;
+      gap: 24px;
+      margin-left: auto;
+    }
+    .nav-links a {
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 14px;
+      transition: color 0.2s;
+    }
+    .nav-links a:hover, .nav-links a.active { color: var(--teal); }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 40px 24px 80px;
+    }
+    h1 {
+      font-size: 32px;
+      font-weight: 700;
+      margin-bottom: 8px;
+      background: linear-gradient(135deg, var(--teal), var(--orange));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .subtitle {
+      color: var(--text-secondary);
+      font-size: 14px;
+      margin-bottom: 32px;
+    }
+    h2 {
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--teal);
+      margin: 32px 0 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    h3 {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin: 20px 0 8px;
+    }
+    p, li {
+      color: var(--text-secondary);
+      font-size: 15px;
+      margin-bottom: 12px;
+    }
+    ul, ol {
+      padding-left: 24px;
+      margin-bottom: 16px;
+    }
+    li { margin-bottom: 6px; }
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 20px;
+    }
+    .contact-info {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    .contact-item {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .contact-item label {
+      display: block;
+      font-size: 12px;
+      color: var(--teal);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 4px;
+    }
+    .contact-item span {
+      color: var(--text-primary);
+      font-size: 14px;
+    }
+    .footer-note {
+      margin-top: 40px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border);
+      color: var(--text-secondary);
+      font-size: 13px;
+      text-align: center;
+    }
+    @media (max-width: 640px) {
+      h1 { font-size: 24px; }
+      .contact-info { grid-template-columns: 1fr; }
+      .header-inner { flex-wrap: wrap; }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-inner">
+      <a href="/login" class="brand">Sky<span>Sync</span></a>
+      <nav class="nav-links">
+        <a href="/privacy" {% if page == 'privacy' %}class="active"{% endif %}>Privacy</a>
+        <a href="/terms" {% if page == 'terms' %}class="active"{% endif %}>Terms</a>
+        <a href="/support" {% if page == 'support' %}class="active"{% endif %}>Support</a>
+        <a href="/login">Sign In</a>
+      </nav>
+    </div>
+  </div>
+
+  <div class="container">
+    {% if page == 'privacy' %}
+    <h1>Privacy Policy</h1>
+    <p class="subtitle">Last updated: August 2026</p>
+
+    <div class="card">
+      <h2>1. Information We Collect</h2>
+      <p>SkySync collects only the information necessary to provide our cloud storage service:</p>
+      <ul>
+        <li><strong>Account Information:</strong> Name, email address, and phone number (via Telegram authentication)</li>
+        <li><strong>File Data:</strong> Files you upload to our Telegram-backed storage infrastructure</li>
+        <li><strong>Usage Data:</strong> Activity logs including login times, file operations, and IP addresses</li>
+        <li><strong>Session Data:</strong> Temporary session cookies for authentication (stored locally on server)</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>2. How We Use Your Data</h2>
+      <ul>
+        <li>To provide and maintain the SkySync cloud storage service</li>
+        <li>To authenticate your identity and prevent unauthorized access</li>
+        <li>To track file operations for security and auditing purposes</li>
+        <li>To improve our service and user experience</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>3. Data Storage &amp; Security</h2>
+      <p>File data is stored via the Telegram API as an underlying storage layer. We implement:</p>
+      <ul>
+        <li>End-to-end encrypted session cookies</li>
+        <li>Server-side session management with secure storage</li>
+        <li>Rate limiting and brute-force protection on authentication endpoints</li>
+        <li>Security headers (X-Content-Type-Options, X-Frame-Options, X-XSS-Protection)</li>
+        <li>Password strength validation</li>
+        <li>Activity logging for audit trails</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>4. Data Sharing</h2>
+      <p>We do not sell, trade, or share your personal information with third parties, except:</p>
+      <ul>
+        <li>When required by law or legal process</li>
+        <li>When you explicitly share files via shareable links</li>
+        <li>To protect the rights and safety of SkySync and its users</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>5. Data Retention</h2>
+      <ul>
+        <li>Account data is retained as long as your account is active</li>
+        <li>Files in trash are permanently deleted after 30 days</li>
+        <li>Activity logs are retained for security auditing purposes</li>
+        <li>Share links expire based on your configured expiration period</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>6. Your Rights</h2>
+      <p>You have the right to:</p>
+      <ul>
+        <li>Access, update, or delete your personal information</li>
+        <li>Download all your stored files</li>
+        <li>Revoke share links at any time</li>
+        <li>Request complete account deletion</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>7. Contact</h2>
+      <p>For privacy-related inquiries, contact us at:</p>
+      <div class="contact-info">
+        <div class="contact-item">
+          <label>Email</label>
+          <span>privacy@tdrive.app</span>
+        </div>
+        <div class="contact-item">
+          <label>Response Time</label>
+          <span>Within 48 hours</span>
+        </div>
+      </div>
+    </div>
+
+    {% elif page == 'terms' %}
+    <h1>Terms of Service</h1>
+    <p class="subtitle">Last updated: August 2026</p>
+
+    <div class="card">
+      <h2>1. Acceptance of Terms</h2>
+      <p>By accessing or using SkySync, you agree to be bound by these Terms of Service. If you do not agree, please do not use the service.</p>
+    </div>
+
+    <div class="card">
+      <h2>2. Service Description</h2>
+      <p>SkySync is a cloud storage web application that uses Telegram as an underlying storage infrastructure, providing:</p>
+      <ul>
+        <li>File upload, download, and management</li>
+        <li>File sharing via secure, expiring links</li>
+        <li>File organization with favorites and trash</li>
+        <li>Multi-user account support</li>
+        <li>Activity tracking and audit logs</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>3. User Responsibilities</h2>
+      <ul>
+        <li>Maintain the confidentiality of your account credentials</li>
+        <li>Upload only files you have the right to store</li>
+        <li>Do not use the service for illegal or harmful purposes</li>
+        <li>Do not attempt to circumvent security measures or rate limits</li>
+        <li>Report any security vulnerabilities responsibly</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>4. File Storage</h2>
+      <ul>
+        <li>Maximum file size: 100 MB (configurable by administrator)</li>
+        <li>Supported formats: All file types</li>
+        <li>Files are stored via the Telegram API infrastructure</li>
+        <li>Deleted files are retained in trash for 30 days before permanent deletion</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>5. Limitation of Liability</h2>
+      <p>SkySync is provided "as is" without warranty. We are not liable for:</p>
+      <ul>
+        <li>Data loss due to service interruption</li>
+        <li>Unauthorized access despite reasonable security measures</li>
+        <li>Third-party actions on shared content</li>
+        <li>Service availability or performance guarantees</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>6. Termination</h2>
+      <p>We reserve the right to suspend or terminate accounts that violate these terms or engage in abusive behavior.</p>
+    </div>
+
+    <div class="card">
+      <h2>7. Changes to Terms</h2>
+      <p>We may update these terms from time to time. Continued use of the service constitutes acceptance of the updated terms.</p>
+    </div>
+
+    <div class="card">
+      <h2>8. Contact</h2>
+      <p>For questions about these terms:</p>
+      <div class="contact-info">
+        <div class="contact-item">
+          <label>Email</label>
+          <span>support@tdrive.app</span>
+        </div>
+        <div class="contact-item">
+          <label>Response Time</label>
+          <span>Within 48 hours</span>
+        </div>
+      </div>
+    </div>
+
+    {% elif page == 'support' %}
+    <h1>Support Center</h1>
+    <p class="subtitle">We're here to help</p>
+
+    <div class="card">
+      <h2>Frequently Asked Questions</h2>
+
+      <h3>How do I upload files?</h3>
+      <p>Click the upload button in the dashboard toolbar, or drag and drop files onto the dropzone area. You can also select multiple files at once.</p>
+
+      <h3>What's the maximum file size?</h3>
+      <p>The default maximum file size is 100 MB. This can be configured by the system administrator.</p>
+
+      <h3>How do file shares work?</h3>
+      <p>Click the share icon on any file to generate a shareable link. You can configure:</p>
+      <ul>
+        <li><strong>Can View:</strong> Recipients can see file details</li>
+        <li><strong>Can Download:</strong> Recipients can download the file</li>
+        <li><strong>Expiration:</strong> Links expire after a set number of days</li>
+      </ul>
+
+      <h3>How do I recover deleted files?</h3>
+      <p>Go to the Trash view in the sidebar. Deleted files are kept for 30 days. Click "Restore" to recover a file, or "Delete Permanently" to remove it immediately.</p>
+
+      <h3>How do favorites work?</h3>
+      <p>Click the star icon on any file to add it to your favorites for quick access. You can view all favorites from the Favorites section in the sidebar.</p>
+
+      <h3>Can I rename files?</h3>
+      <p>Yes, right-click on a file and select "Rename" from the context menu, or click the rename action in the file card.</p>
+    </div>
+
+    <div class="card">
+      <h2>Contact Us</h2>
+      <p>Need more help? Reach out to our support team:</p>
+      <div class="contact-info">
+        <div class="contact-item">
+          <label>Email</label>
+          <span>support@tdrive.app</span>
+        </div>
+        <div class="contact-item">
+          <label>Response Time</label>
+          <span>Within 24 hours</span>
+        </div>
+        <div class="contact-item">
+          <label>Documentation</label>
+          <span>Available in-app</span>
+        </div>
+        <div class="contact-item">
+          <label>Status</label>
+          <span>Service operational</span>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="footer-note">
+      &copy; 2026 SkySync. All rights reserved.
+    </div>
+  </div>
+</body>
+</html>

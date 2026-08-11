@@ -1,0 +1,63 @@
+# Environment secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Flask
+instance/
+.flask_session/
+flask_session/
+.flask_secret
+
+# Telegram session files
+*.session
+*.session-journal
+telegram_sessions/
+
+# Auth state
+.auth_state.json
+
+# Database
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Uploads & temp
+uploads/
+previews/
+downloads/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Archives
+*.zip
+
+# Virtual environments
+.venv/
+venv/
+env/
