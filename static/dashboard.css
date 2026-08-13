@@ -1107,4 +1107,70 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 }
 
 /* --- Drag-over body state --- */
+
+/* --- WebDAV Settings --- */
+.webdav-token-list {
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+.webdav-token-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--border, #e0e0e0);
+  border-radius: var(--radius, 8px);
+  margin-bottom: 8px;
+}
+.webdav-token-info {
+  display: flex;
+  flex-direction: column;
+}
+.webdav-token-label {
+  font-weight: 600;
+  color: var(--text-primary, #333);
+}
+.webdav-token-meta {
+  font-size: 12px;
+  color: var(--text-secondary, #888);
+}
+.webdav-token-actions {
+  display: flex;
+  gap: 8px;
+}
+.webdav-token-created {
+  background: var(--bg-success, #f0fdf4);
+  border: 1px solid var(--border-success, #4ade80);
+  border-radius: 8px;
+  padding: 16px;
+}
+.webdav-instructions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.webdav-instructions h4 {
+  margin: 0;
+  color: var(--text-primary, #333);
+}
+.webdav-instructions p {
+  margin: 4px 0;
+  font-size: 14px;
+}
+.token-code {
+  background: var(--bg-secondary, #f5f5f5);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 13px;
+  word-break: break-all;
+}
+.empty-text {
+  color: var(--text-secondary, #888);
+  font-style: italic;
+}
+.error-text {
+  color: var(--text-error, #dc2626);
+}
 body.drag-active .dropzone { border-color: var(--accent); background: rgba(52,211,153,0.12); }

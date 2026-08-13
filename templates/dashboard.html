@@ -64,6 +64,9 @@
       </section>
 
       <div class="sidebar-footer">
+        <button class="nav-item" id="webdav-settings-btn" type="button" title="WebDAV settings">
+          <span class="nav-icon">&#128194;</span> WebDAV
+        </button>
         <a class="nav-item" href="{{ url_for('logout') }}" id="logout-link">
           <span class="nav-icon">&#10140;</span> Logout
         </a>
@@ -316,6 +319,39 @@
   </div>
 
   <div class="toast-stack" id="toast-stack" role="status" aria-live="polite"></div>
+
+  <!-- WebDAV Settings Modal -->
+  <div class="modal-backdrop" id="webdav-modal" hidden role="dialog" aria-modal="true" aria-label="WebDAV Settings">
+    <div class="modal-card compact-card">
+      <div class="modal-heading">
+        <h3>WebDAV Access</h3>
+        <p>Connect to SkySync via WebDAV from Windows Explorer or any WebDAV client.</p>
+      </div>
+      <div id="webdav-token-list" class="webdav-token-list">
+        <p>Generating token list...</p>
+      </div>
+      <div class="modal-actions">
+        <button class="soft-btn" data-close-modal="webdav-modal" type="button">Close</button>
+        <button class="primary-btn" id="webdav-create-btn" type="button">Generate New Token</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="webdav-create-modal" hidden role="dialog" aria-modal="true" aria-label="Create WebDAV Token">
+    <div class="modal-card compact-card">
+      <div class="modal-heading">
+        <h3>Create WebDAV Token</h3>
+        <p>Generate a new WebDAV access token.</p>
+      </div>
+      <form id="webdav-create-form" novalidate>
+        <input id="webdav-token-label" type="text" maxlength="100" placeholder="Token label (e.g. 'Home PC')" aria-label="Token label">
+        <div class="modal-actions">
+          <button class="soft-btn" data-close-modal="webdav-create-modal" type="button">Cancel</button>
+          <button class="primary-btn" type="submit" id="webdav-create-save">Create</button>
+        </div>
+      </form>
+    </div>
+  </div>
 
   <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
 </body>

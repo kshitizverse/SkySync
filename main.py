@@ -46,6 +46,7 @@ from storage_db import (  # noqa: E402
     list_user_folders,
     list_user_shares,
     list_users,
+    list_webdav_tokens,
     log_activity,
     move_file_to_folder,
     permanent_delete_file,
@@ -55,6 +56,7 @@ from storage_db import (  # noqa: E402
     restore_file,
     restore_folder,
     revoke_all_user_shares,
+    revoke_all_webdav_tokens,
     revoke_share,
     row_to_dict,
     soft_delete_file,
@@ -206,6 +208,72 @@ Session(app)
 validate_environment()
 init_db()
 purge_expired_trash()
+
+
+# ---------------------------------------------------------------------------
+# WebDAV integration — mount at /webdav/
+# ---------------------------------------------------------------------------
+
+def _setup_webdav():
+    """Configure and mount WsgiDAV as a WSGI sub-application."""
+    try:
+        from wsgidav.wsgidav_app import WsgiDAVApp
+        from webdav_provider import SkySyncDAVProvider
+        from webdav_auth import SkySyncDomainController
+
+        dav_config = {
+            "host": "0.0.0.0",
+            "port": 0,
+            "provider_mapping": {"/": SkySyncDAVProvider()},
+            "http_authenticator": {
+                "domain_controller": SkySyncDomainController,
+                "accept_basic": True,
+                "accept_digest": False,
+                "default_to_digest": False,
+            },
+            "simple_dc": {"user_mapping": {"*": True}},
+            "verbose": 1,
+            "logging": {
+                "enable": False,
+            },
+            "hotfixes": {
+                "winxp_accept_root_share_login": True,
+                "win_accept_anonymous_options": True,
+            },
+            "middleware_stack": [
+                "wsgidav.error_printer.ErrorPrinter",
+                "wsgidav.http_authenticator.HTTPAuthenticator",
+                "wsgidav.request_resolver.RequestResolver",
+            ],
+        }
+
+        webdav_app = WsgiDAVApp(dav_config)
+
+        class WebDAVMiddleware:
+            """WSGI middleware that routes /webdav/* to WsgiDAV."""
+
+            def __init__(self, wsgi_app, dav_app, prefix="/webdav"):
+                self.wsgi_app = wsgi_app
+                self.dav_app = dav_app
+                self.prefix = prefix
+
+            def __call__(self, environ, start_response):
+                path = environ.get("PATH_INFO", "")
+                if path == self.prefix or path.startswith(self.prefix + "/"):
+                    environ["SCRIPT_NAME"] = self.prefix
+                    environ["PATH_INFO"] = path[len(self.prefix):]
+                    return self.dav_app(environ, start_response)
+                return self.wsgi_app(environ, start_response)
+
+        app.wsgi_app = WebDAVMiddleware(app.wsgi_app, webdav_app, "/webdav")
+        logger.info("WebDAV endpoint mounted at /webdav/")
+    except ImportError:
+        logger.warning("wsgidav not installed — WebDAV endpoint disabled")
+    except Exception as exc:
+        logger.error("Failed to mount WebDAV: %s", exc)
+
+
+_setup_webdav()
 
 
 def cleanup_old_previews():
@@ -1381,6 +1449,7 @@ def get_profile():
     if not name:
         name = (user["name"] or "").strip()
     stats = get_file_stats(user["id"])
+    token_count = len(list_webdav_tokens(user["id"]))
     return jsonify({
         "success": True,
         "user": {
@@ -1395,6 +1464,8 @@ def get_profile():
             "telegram_connected": session.get("telegram_connected"),
             "storage_target": get_storage_chat(),
             "stats": stats,
+            "webdav_token_count": token_count,
+            "webdav_url": request.host_url.rstrip("/") + "/webdav/",
         },
     }), 200
 
@@ -1450,6 +1521,47 @@ def get_activity():
         ]
 
     return jsonify({"success": True, "activities": activities}), 200
+
+
+# ---------------------------------------------------------------------------
+# WebDAV Token Management API
+# ---------------------------------------------------------------------------
+
+@app.route("/api/webdav/tokens", methods=["GET"])
+def list_webdav_tokens_endpoint():
+    user = require_auth()
+    if not user:
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+    from storage_db import list_webdav_tokens
+    tokens = list_webdav_tokens(user["id"])
+    return jsonify({"success": True, "tokens": tokens}), 200
+
+
+@app.route("/api/webdav/tokens", methods=["POST"])
+def create_webdav_token_endpoint():
+    user = require_auth()
+    if not user:
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+    data = request_payload()
+    label = (data.get("label") or "default").strip()
+    if len(label) > 100:
+        return jsonify({"success": False, "error": "Label too long"}), 400
+    from storage_db import create_webdav_token
+    token = create_webdav_token(user["id"], label=label)
+    log_activity(user["id"], "webdav_token_create", detail=label, ip_address=client_ip())
+    return jsonify({"success": True, "token": token, "label": label,
+                     "message": "Save this token now — it will not be shown again."}), 201
+
+
+@app.route("/api/webdav/tokens/<int:token_id>", methods=["DELETE"])
+def revoke_webdav_token_endpoint(token_id):
+    user = require_auth()
+    if not user:
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+    from storage_db import revoke_webdav_token
+    revoke_webdav_token(token_id, user["id"])
+    log_activity(user["id"], "webdav_token_revoke", detail=str(token_id), ip_address=client_ip())
+    return jsonify({"success": True, "message": "Token revoked"}), 200
 
 
 @app.route("/api/user/delete-account", methods=["POST"])

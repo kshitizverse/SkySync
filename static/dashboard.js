@@ -1405,3 +1405,111 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
+
+// WebDAV token management
+
+function openWebDAVSettings() {
+  openModal('webdav-modal');
+  loadWebDAVTokens();
+}
+
+function loadWebDAVTokens() {
+  const container = document.getElementById('webdav-token-list');
+  if (!container) return;
+  container.innerHTML = '<p>Loading tokens...</p>';
+  fetchJSON('/api/webdav/tokens')
+    .then(data => {
+      if (!data.success) throw new Error(data.error || 'Failed to load tokens');
+      if (data.tokens.length === 0) {
+        container.innerHTML = '<p class="empty-text">No WebDAV tokens yet. Create one to get started.</p>';
+        return;
+      }
+      container.innerHTML = data.tokens.map(token => `
+        <div class="webdav-token-item">
+          <div class="webdav-token-info">
+            <span class="webdav-token-label">${escapeHtml(token.label)}</span>
+            <span class="webdav-token-meta">Created: ${formatDate(token.created_at)}</span>
+          </div>
+          <div class="webdav-token-actions">
+            <button class="soft-btn small" type="button" data-action="revoke" data-token-id="${token.id}" title="Revoke token">Revoke</button>
+          </div>
+        </div>
+      `).join('');
+      container.querySelectorAll('[data-action="revoke"]').forEach(btn => {
+        btn.addEventListener('click', () => revokeWebDAVToken(btn.dataset.tokenId));
+      });
+    })
+    .catch(err => {
+      container.innerHTML = `<p class="error-text">${escapeHtml(err.message)}</p>`;
+    });
+}
+
+function createWebDAVToken() {
+  const labelInput = document.getElementById('webdav-token-label');
+  const label = (labelInput.value || 'default').trim() || 'default';
+  fetchJSON('/api/webdav/tokens', {
+    method: 'POST',
+    body: JSON.stringify({ label }),
+    headers: { 'Content-Type': 'application/json' },
+  }).then(data => {
+    if (!data.success) throw new Error(data.error || 'Failed to create token');
+    closeModal('webdav-create-modal');
+    showWebDAVTokenCreated(data.token, label);
+  }).catch(err => {
+    showToast(err.message || 'Failed to create token', 'error');
+  });
+}
+
+function showWebDAVTokenCreated(token, label) {
+  const container = document.getElementById('webdav-token-list');
+  if (!container) return;
+  const user = state.profile || {};
+  const webdavUrl = (user.webdav_url || (window.location.origin + '/webdav/'));
+  container.innerHTML = `
+    <div class="webdav-token-created">
+      <div class="webdav-instructions">
+        <h4>Connect with WebDAV</h4>
+        <p><strong>Server:</strong> ${webdavUrl}</p>
+        <p><strong>Username:</strong> Your user ID</p>
+        <p><strong>Password (token):</strong> <code class="token-code">${escapeHtml(token)}</code></p>
+        <p>Copy this token now — it will not be shown again.</p>
+      </div>
+    </div>
+  `;
+  loadWebDAVTokens();
+}
+
+function revokeWebDAVToken(tokenId) {
+  showConfirm('Revoke WebDAV token?', 'This will immediately disable WebDAV access with this token.', 'Revoke')
+    .then(confirmed => {
+      if (!confirmed) return;
+      fetchJSON(`/api/webdav/tokens/${tokenId}`, { method: 'DELETE' })
+        .then(data => {
+          if (!data.success) throw new Error(data.error || 'Failed to revoke token');
+          showToast('Token revoked', 'success');
+          loadWebDAVTokens();
+        })
+        .catch(err => showToast(err.message || 'Failed to revoke token', 'error'));
+    });
+}
+
+// Event listeners
+document.addEventListener('DOMContentLoaded', function() {
+  const webdavBtn = document.getElementById('webdav-settings-btn');
+  if (webdavBtn) {
+    webdavBtn.addEventListener('click', openWebDAVSettings);
+  }
+  const createForm = document.getElementById('webdav-create-form');  if (createForm) {
+    createForm.addEventListener('submit', function(e) {
+      e.preventDefault();
+      createWebDAVToken();
+    });
+  }
+  const createBtn = document.getElementById('webdav-create-btn');
+  if (createBtn) {
+    createBtn.addEventListener('click', function(e) {
+      e.preventDefault();
+      openModal('webdav-create-modal');
+    });
+  }
+});

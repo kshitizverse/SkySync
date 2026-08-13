@@ -179,6 +179,19 @@ def init_db():
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS webdav_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                token_hash TEXT NOT NULL,
+                label TEXT NOT NULL DEFAULT 'default',
+                created_at TEXT NOT NULL,
+                last_used_at TEXT,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            """
+        )
 
         for stmt in [
             "CREATE INDEX IF NOT EXISTS idx_files_user ON file_records(user_id)",
@@ -191,6 +204,7 @@ def init_db():
             "CREATE INDEX IF NOT EXISTS idx_activity_user ON activity_log(user_id)",
             "CREATE INDEX IF NOT EXISTS idx_folders_user ON folders(user_id)",
             "CREATE INDEX IF NOT EXISTS idx_folders_parent ON folders(parent_id)",
+            "CREATE INDEX IF NOT EXISTS idx_webdav_tokens_user ON webdav_tokens(user_id)",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username IS NOT NULL",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_user_id) WHERE telegram_user_id IS NOT NULL",
             "CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone)",
@@ -656,6 +670,7 @@ def delete_user_account(user_id):
         conn.execute("UPDATE file_shares SET is_active = 0 WHERE owner_user_id = ?", (user_id,))
         conn.execute("DELETE FROM activity_log WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM file_records WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM webdav_tokens WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
 
 
@@ -671,3 +686,63 @@ def count_user_active_shares(user_id):
             (user_id,),
         ).fetchone()
         return row["cnt"]
+
+
+# ---------------------------------------------------------------------------
+# WebDAV token operations
+# ---------------------------------------------------------------------------
+
+def _hash_webdav_token(token):
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_webdav_token(user_id, label="default"):
+    token = secrets.token_urlsafe(32)
+    token_hash = _hash_webdav_token(token)
+    now = utcnow_iso()
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO webdav_tokens (user_id, token_hash, label, created_at) VALUES (?, ?, ?, ?)",
+            (user_id, token_hash, label, now),
+        )
+    return token
+
+
+def verify_webdav_token(token):
+    token_hash = _hash_webdav_token(token)
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM webdav_tokens WHERE token_hash = ?",
+            (token_hash,),
+        ).fetchone()
+        if not row:
+            return None
+        user = get_user_by_id(row["user_id"])
+        if not user or user.get("account_status") != "active":
+            return None
+        conn.execute(
+            "UPDATE webdav_tokens SET last_used_at = ? WHERE id = ?",
+            (utcnow_iso(), row["id"]),
+        )
+        return user
+
+
+def list_webdav_tokens(user_id):
+    with get_connection() as conn:
+        return rows_to_dicts(conn.execute(
+            "SELECT id, label, created_at, last_used_at FROM webdav_tokens WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall())
+
+
+def revoke_webdav_token(token_id, user_id):
+    with get_connection() as conn:
+        conn.execute(
+            "DELETE FROM webdav_tokens WHERE id = ? AND user_id = ?",
+            (token_id, user_id),
+        )
+
+
+def revoke_all_webdav_tokens(user_id):
+    with get_connection() as conn:
+        conn.execute("DELETE FROM webdav_tokens WHERE user_id = ?", (user_id,))
