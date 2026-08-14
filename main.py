@@ -68,7 +68,7 @@ from storage_db import (  # noqa: E402
     update_user_telegram_info,
 )
 from rate_limiter import RateLimitStore  # noqa: E402
-from telegram_handler import create_telegram_handler_for_user  # noqa: E402
+from telegram_handler import create_telegram_handler_for_user, run_telegram_op  # noqa: E402
 from telegram_auth import TelegramAuthHandler  # noqa: E402
 
 
@@ -224,6 +224,7 @@ def _setup_webdav():
         dav_config = {
             "host": "0.0.0.0",
             "port": 0,
+            "mount_path": "/webdav",
             "provider_mapping": {"/": SkySyncDAVProvider()},
             "http_authenticator": {
                 "domain_controller": SkySyncDomainController,
@@ -249,6 +250,45 @@ def _setup_webdav():
 
         webdav_app = WsgiDAVApp(dav_config)
 
+        from wsgidav.request_server import RequestServer as _OrigReqServ
+
+        # Monkey-patch WsgiDAV's _stream_data to fix a blocking-read bug.
+        # The original loops on wsgi.input.read() until it returns b"" (EOF).
+        # With HTTP keep-alive the socket never closes, so read() blocks
+        # for 15-30 s even though the body is already buffered.  When
+        # Content-Length is present we read exactly that many bytes and stop,
+        # preserving streaming (no full-body RAM load for large files).
+        def _fast_stream(self, environ, block_size):
+            inp = environ.get("wsgi.input")
+            if inp is None:
+                return
+            _cl = environ.get("CONTENT_LENGTH", "")
+            try:
+                _cl_int = int(_cl) if _cl else -1
+            except (ValueError, TypeError):
+                _cl_int = -1
+
+            if _cl_int >= 0:
+                total_read = 0
+                while total_read < _cl_int:
+                    buf = inp.read(min(block_size, _cl_int - total_read))
+                    if buf == b"":
+                        break
+                    total_read += len(buf)
+                    environ["wsgidav.some_input_read"] = 1
+                    yield buf
+                environ["wsgidav.all_input_read"] = 1
+            else:
+                while True:
+                    buf = inp.read(block_size)
+                    if buf == b"":
+                        break
+                    environ["wsgidav.some_input_read"] = 1
+                    yield buf
+                environ["wsgidav.all_input_read"] = 1
+
+        _OrigReqServ._stream_data = _fast_stream
+
         class WebDAVMiddleware:
             """WSGI middleware that routes /webdav/* to WsgiDAV."""
 
@@ -259,10 +299,12 @@ def _setup_webdav():
 
             def __call__(self, environ, start_response):
                 path = environ.get("PATH_INFO", "")
+                method = environ.get("REQUEST_METHOD", "")
                 if path == self.prefix or path.startswith(self.prefix + "/"):
                     environ["SCRIPT_NAME"] = self.prefix
                     environ["PATH_INFO"] = path[len(self.prefix):]
-                    return self.dav_app(environ, start_response)
+                    _r = self.dav_app(environ, start_response)
+                    return _r
                 return self.wsgi_app(environ, start_response)
 
         app.wsgi_app = WebDAVMiddleware(app.wsgi_app, webdav_app, "/webdav")
@@ -1002,8 +1044,8 @@ def upload_file():
         return jsonify({"success": False, "error": "No file selected"}), 400
 
     safe_name = sanitize_filename(file.filename)
-    handler = create_telegram_handler_for_user(user)
-    if not handler:
+    cached = create_telegram_handler_for_user(user)
+    if not cached:
         return jsonify({"success": False, "error": "Telegram storage is not configured"}), 503
 
     os.makedirs("uploads", exist_ok=True)
@@ -1019,7 +1061,7 @@ def upload_file():
         if file_size > max_size:
             return jsonify({"success": False, "error": f"File exceeds the {max_size // (1024*1024)} MB upload limit"}), 413
 
-        upload_result = run_async(handler.send_file(temp_path, caption=f"Uploaded by {user['email']}"))
+        upload_result = run_telegram_op(cached, cached.handler.send_file(temp_path, caption=f"Uploaded by {user['email']}"))
         if not upload_result or not upload_result.get("message_id"):
             return jsonify({"success": False, "error": "Telegram upload failed"}), 500
 
@@ -1062,15 +1104,15 @@ def download_file(file_id):
     if not record or record.get("is_deleted"):
         return jsonify({"success": False, "error": "File not found"}), 404
 
-    handler = create_telegram_handler_for_user(user)
-    if not handler:
+    cached = create_telegram_handler_for_user(user)
+    if not cached:
         return jsonify({"success": False, "error": "Telegram storage is not configured"}), 503
 
     os.makedirs("downloads", exist_ok=True)
     safe_name = sanitize_filename(record["filename"]) or f"file_{file_id}"
     output_path = os.path.join("downloads", f"{file_id}_{safe_name}")
     try:
-        success = run_async(handler.download_file(record["telegram_message_id"], output_path))
+        success = run_telegram_op(cached, cached.handler.download_file(record["telegram_message_id"], output_path))
         if not success or not os.path.exists(output_path):
             return jsonify({"success": False, "error": "Download failed"}), 500
         log_activity(user["id"], "download", detail=record["filename"], ip_address=client_ip())
@@ -1097,15 +1139,15 @@ def preview_file(file_id):
     if not (mime_type.startswith("image/") or mime_type.startswith("video/") or mime_type.startswith("audio/")):
         return jsonify({"success": False, "error": "Preview not available for this file type"}), 400
 
-    handler = create_telegram_handler_for_user(user)
-    if not handler:
+    cached = create_telegram_handler_for_user(user)
+    if not cached:
         return jsonify({"success": False, "error": "Telegram storage is not configured"}), 503
 
     os.makedirs("previews", exist_ok=True)
     safe_name = sanitize_filename(record["filename"]) or f"preview_{file_id}"
     preview_path = os.path.join("previews", f"{file_id}_{safe_name}")
     if not os.path.exists(preview_path) or os.path.getsize(preview_path) == 0:
-        success = run_async(handler.download_file(record["telegram_message_id"], preview_path))
+        success = run_telegram_op(cached, cached.handler.download_file(record["telegram_message_id"], preview_path))
         if not success or not os.path.exists(preview_path):
             return jsonify({"success": False, "error": "Preview download failed"}), 500
 
@@ -1204,10 +1246,10 @@ def permanent_delete_file_endpoint(file_id):
     if not record or not record.get("is_deleted"):
         return jsonify({"success": False, "error": "File not found in trash"}), 404
 
-    handler = create_telegram_handler_for_user(user)
-    if handler:
+    cached = create_telegram_handler_for_user(user)
+    if cached:
         try:
-            run_async(handler.delete_message(record["telegram_message_id"]))
+            run_telegram_op(cached, cached.handler.delete_message(record["telegram_message_id"]))
         except Exception as exc:
             logger.warning("Telegram delete failed for file %s: %s", file_id, exc)
 
@@ -1374,8 +1416,8 @@ def shared_download(token):
         return jsonify({"success": False, "error": "File not found"}), 404
 
     owner = get_user_by_id(record["user_id"])
-    handler = create_telegram_handler_for_user(owner) if owner else None
-    if not handler:
+    cached = create_telegram_handler_for_user(owner) if owner else None
+    if not cached:
         return jsonify({"success": False, "error": "Telegram storage is not configured"}), 503
 
     os.makedirs("downloads", exist_ok=True)
@@ -1383,7 +1425,7 @@ def shared_download(token):
     output_path = os.path.join("downloads", f"share_{safe_name}")
     try:
         logger.info("Shared download: owner=%s msg_id=%s", record["user_id"], record["telegram_message_id"])
-        success = run_async(handler.download_file(record["telegram_message_id"], output_path))
+        success = run_telegram_op(cached, cached.handler.download_file(record["telegram_message_id"], output_path))
         logger.info("Shared download result: success=%s exists=%s", success, os.path.exists(output_path))
         if not success or not os.path.exists(output_path):
             return jsonify({"success": False, "error": "Download failed"}), 500
@@ -1420,15 +1462,15 @@ def shared_preview(token):
         return jsonify({"success": False, "error": "Preview not available"}), 400
 
     owner = get_user_by_id(record["user_id"])
-    handler = create_telegram_handler_for_user(owner) if owner else None
-    if not handler:
+    cached = create_telegram_handler_for_user(owner) if owner else None
+    if not cached:
         return jsonify({"success": False, "error": "Telegram storage is not configured"}), 503
 
     os.makedirs("previews", exist_ok=True)
     safe_name = sanitize_filename(record["filename"]) or f"preview_{record['id']}"
     preview_path = os.path.join("previews", f"share_{safe_name}")
     if not os.path.exists(preview_path) or os.path.getsize(preview_path) == 0:
-        success = run_async(handler.download_file(record["telegram_message_id"], preview_path))
+        success = run_telegram_op(cached, cached.handler.download_file(record["telegram_message_id"], preview_path))
         if not success or not os.path.exists(preview_path):
             return jsonify({"success": False, "error": "Preview download failed"}), 500
 

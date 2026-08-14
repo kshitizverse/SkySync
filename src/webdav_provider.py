@@ -59,6 +59,17 @@ def _safe_webdav_name(name):
     return True
 
 
+def _run_telegram_op(cached_entry, coro, timeout=300):
+    """Run a Telegram coroutine on the user's persistent event loop.
+
+    *cached_entry* is a ``_CachedHandler`` from the handler cache.
+    Acquires the per-user lock so concurrent WebDAV requests for the same
+    user are serialised.  Different users are NOT blocked.
+    """
+    from telegram_handler import run_telegram_op as _run_op
+    return _run_op(cached_entry, coro, timeout=timeout)
+
+
 # ---------------------------------------------------------------------------
 # DAV resource classes
 # ---------------------------------------------------------------------------
@@ -208,10 +219,11 @@ class SkySyncFolder(DAVCollection):
         from storage_db import rename_folder, log_activity
         rename_folder(self._folder["id"], user_id, new_name)
         log_activity(user_id, "webdav_rename_folder", detail=f"{self._folder['name']} -> {new_name}")
+        return True
 
     def copy_move_single(self, dest_path, *, is_move):
         if is_move:
-            self.handle_move(dest_path)
+            return self.handle_move(dest_path)
         else:
             from wsgidav.dav_provider import DAVError
             raise DAVError(405, "Copy not supported for folders")
@@ -220,7 +232,7 @@ class SkySyncFolder(DAVCollection):
         return True
 
     def move_recursive(self, dest_path):
-        self.handle_move(dest_path)
+        return self.handle_move(dest_path)
 
     def support_recursive_delete(self):
         return False
@@ -286,21 +298,17 @@ class SkySyncFile(DAVNonCollection):
         user = get_user_by_id(user_id)
         if not user:
             return io.BytesIO(b"")
-        handler = create_telegram_handler_for_user(user)
-        if not handler:
+        cached = create_telegram_handler_for_user(user)
+        if not cached:
             return io.BytesIO(b"")
-        import asyncio
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".tmp")
         tmp_path = tmp.name
         tmp.close()
         try:
-            loop = asyncio.new_event_loop()
-            try:
-                success = loop.run_until_complete(
-                    handler.download_file(self._record["telegram_message_id"], tmp_path)
-                )
-            finally:
-                loop.close()
+            success = _run_telegram_op(
+                cached,
+                cached.handler.download_file(self._record["telegram_message_id"], tmp_path),
+            )
             if not success:
                 return io.BytesIO(b"")
             with open(tmp_path, "rb") as f:
@@ -348,21 +356,30 @@ class SkySyncFile(DAVNonCollection):
             except OSError:
                 pass
             return
-        handler = create_telegram_handler_for_user(user)
-        if not handler:
+        _cached = create_telegram_handler_for_user(user)
+        logger.info("end_write: got cached handler=0x%x for user=%s", id(_cached) if _cached else 0, user_id)
+        cached = _cached
+        if not cached:
             try:
                 os.unlink(tmp_path)
             except OSError:
                 pass
             return
-        import asyncio
         filename = self._record.get("filename", os.path.basename(tmp_path)) if self._record else os.path.basename(tmp_path)
         size = os.path.getsize(tmp_path)
-        loop = asyncio.new_event_loop()
+        t_start = time.monotonic()
         try:
-            result = loop.run_until_complete(handler.send_file(tmp_path, caption=f"WebDAV upload: {filename}"))
-        finally:
-            loop.close()
+            logger.info("end_write: uploading for user=%s, file=%s (size=%d)", user_id, filename, size)
+            result = _run_telegram_op(
+                cached,
+                cached.handler.send_file(tmp_path, caption=f"WebDAV upload: {filename}"),
+            )
+            elapsed = int((time.monotonic()-t_start)*1000)
+            logger.info("end_write: completed in %dms, result=%s", elapsed, "ok" if result else "None")
+        except Exception as exc:
+            elapsed = int((time.monotonic()-t_start)*1000)
+            logger.error("WebDAV upload failed: %s (%dms)", exc, elapsed)
+            result = None
         try:
             os.unlink(tmp_path)
         except OSError:
@@ -403,10 +420,11 @@ class SkySyncFile(DAVNonCollection):
         old_name = self._record.get("filename", "")
         update_file_record_name(self._record["id"], user_id, new_name)
         log_activity(user_id, "webdav_rename_file", detail=f"{old_name} -> {new_name}")
+        return True
 
     def copy_move_single(self, dest_path, *, is_move):
         if is_move:
-            self.handle_move(dest_path)
+            return self.handle_move(dest_path)
         else:
             from wsgidav.dav_provider import DAVError
             raise DAVError(405, "Copy not supported")
@@ -415,10 +433,11 @@ class SkySyncFile(DAVNonCollection):
         return True
 
     def move_recursive(self, dest_path):
-        self.handle_move(dest_path)
+        return self.handle_move(dest_path)
 
     def handle_delete(self):
         self.delete()
+        return True
 
 
 # ---------------------------------------------------------------------------
