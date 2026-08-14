@@ -128,16 +128,26 @@ class SkySyncFolder(DAVCollection):
             return None
         from storage_db import list_user_folders, get_folder, get_user_file_record, get_file_record
         folder_id = self._folder["id"] if self._folder else None
-        # Check subfolders
+
+        vault_unlocked = False
+        try:
+            from vault import vault_is_unlocked
+            vault_unlocked = vault_is_unlocked(user_id)
+        except Exception:
+            pass
+
         subfolders = list_user_folders(user_id, parent_id=folder_id)
         for sf in subfolders:
             if sf["name"] == name:
+                if sf.get("is_vaulted") and not vault_unlocked:
+                    return None
                 child_path = self.path.rstrip("/") + "/" + name
                 return SkySyncFolder(child_path, self.environ, sf)
-        # Check files
         files_all = list_user_files(user_id)
         for f in files_all:
             if f["filename"] == name and (f.get("folder_id") == folder_id or (folder_id is None and not f.get("folder_id"))):
+                if f.get("is_vaulted") and not vault_unlocked:
+                    return None
                 child_path = self.path.rstrip("/") + "/" + name
                 return SkySyncFile(child_path, self.environ, f)
         return None
@@ -148,14 +158,26 @@ class SkySyncFolder(DAVCollection):
             return []
         from storage_db import list_user_folders, list_user_files
         folder_id = self._folder["id"] if self._folder else None
+
+        vault_unlocked = False
+        try:
+            from vault import vault_is_unlocked
+            vault_unlocked = vault_is_unlocked(user_id)
+        except Exception:
+            pass
+
         subfolders = list_user_folders(user_id, parent_id=folder_id)
         files_all = list_user_files(user_id)
         folder_files = [f for f in files_all if (f.get("folder_id") == folder_id) or (folder_id is None and not f.get("folder_id"))]
         members = []
         for sf in subfolders:
+            if sf.get("is_vaulted") and not vault_unlocked:
+                continue
             child_path = self.path.rstrip("/") + "/" + sf["name"]
             members.append(SkySyncFolder(child_path, self.environ, sf))
         for f in folder_files:
+            if f.get("is_vaulted") and not vault_unlocked:
+                continue
             child_path = self.path.rstrip("/") + "/" + f["filename"]
             members.append(SkySyncFile(child_path, self.environ, f))
         return members
@@ -198,6 +220,16 @@ class SkySyncFolder(DAVCollection):
         if not user_id or not self._folder:
             from wsgidav.dav_provider import DAVError
             raise DAVError(403, "Cannot delete root")
+
+        if self._folder.get("is_vaulted"):
+            try:
+                from vault import vault_is_unlocked
+                if not vault_is_unlocked(user_id):
+                    from wsgidav.dav_provider import DAVError
+                    raise DAVError(403, "Vault is locked")
+            except Exception:
+                pass
+
         from storage_db import soft_delete_folder, log_activity
         try:
             soft_delete_folder(self._folder["id"], user_id)
@@ -212,6 +244,16 @@ class SkySyncFolder(DAVCollection):
         if not user_id or not self._folder:
             from wsgidav.dav_provider import DAVError
             raise DAVError(403, "Cannot move root")
+
+        if self._folder.get("is_vaulted"):
+            try:
+                from vault import vault_is_unlocked
+                if not vault_is_unlocked(user_id):
+                    from wsgidav.dav_provider import DAVError
+                    raise DAVError(403, "Vault is locked")
+            except Exception:
+                pass
+
         _, new_name = _parse_webdav_path(dest_path)
         if not new_name or not _safe_webdav_name(new_name):
             from wsgidav.dav_provider import DAVError
@@ -293,6 +335,16 @@ class SkySyncFile(DAVNonCollection):
         user_id = _user_id_from_environ(self.environ)
         if not user_id:
             return io.BytesIO(b"")
+
+        if self._record.get("is_vaulted"):
+            try:
+                from vault import vault_is_unlocked
+                if not vault_is_unlocked(user_id):
+                    from wsgidav.dav_provider import DAVError
+                    raise DAVError(403, "Vault is locked")
+            except Exception:
+                pass
+
         from storage_db import get_user_by_id
         from telegram_handler import create_telegram_handler_for_user
         user = get_user_by_id(user_id)
@@ -324,6 +376,15 @@ class SkySyncFile(DAVNonCollection):
                 pass
 
     def begin_write(self, *, content_type=None):
+        user_id = _user_id_from_environ(self.environ)
+        if self._record and self._record.get("is_vaulted"):
+            try:
+                from vault import vault_is_unlocked
+                if not vault_is_unlocked(user_id):
+                    from wsgidav.dav_provider import DAVError
+                    raise DAVError(403, "Vault is locked")
+            except Exception:
+                pass
         self._tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".webdav_upload")
         self._content_type = content_type
         return self._tmp_file
@@ -403,6 +464,16 @@ class SkySyncFile(DAVNonCollection):
         if not user_id or not self._record or not self._record.get("id"):
             from wsgidav.dav_provider import DAVError
             raise DAVError(403, "Cannot delete")
+
+        if self._record.get("is_vaulted"):
+            try:
+                from vault import vault_is_unlocked
+                if not vault_is_unlocked(user_id):
+                    from wsgidav.dav_provider import DAVError
+                    raise DAVError(403, "Vault is locked")
+            except Exception:
+                pass
+
         from storage_db import soft_delete_file, log_activity
         soft_delete_file(self._record["id"], user_id)
         log_activity(user_id, "webdav_delete_file", detail=self._record.get("filename"))
@@ -412,6 +483,16 @@ class SkySyncFile(DAVNonCollection):
         if not user_id or not self._record or not self._record.get("id"):
             from wsgidav.dav_provider import DAVError
             raise DAVError(403, "Cannot move")
+
+        if self._record.get("is_vaulted"):
+            try:
+                from vault import vault_is_unlocked
+                if not vault_is_unlocked(user_id):
+                    from wsgidav.dav_provider import DAVError
+                    raise DAVError(403, "Vault is locked")
+            except Exception:
+                pass
+
         _, new_name = _parse_webdav_path(dest_path)
         if not new_name or not _safe_webdav_name(new_name):
             from wsgidav.dav_provider import DAVError

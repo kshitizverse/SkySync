@@ -34,6 +34,14 @@
         <button class="nav-item" data-view="trash" type="button">
           <span class="nav-icon">&#128465;</span> Trash <span class="nav-count" id="nav-count-trash">0</span>
         </button>
+        <div class="nav-divider"></div>
+        <button class="nav-item vault-nav-item" data-view="vault" type="button" id="vault-nav-btn">
+          <span class="nav-icon" id="vault-nav-icon">&#128274;</span>
+          <span class="vault-nav-label">
+            <span class="vault-nav-title">Vault</span>
+            <span class="vault-nav-subtitle" id="vault-nav-subtitle">Locked</span>
+          </span>
+        </button>
       </nav>
 
       <section class="panel storage-panel" id="storage-panel">
@@ -284,13 +292,16 @@
   </div>
 
   <!-- Context Menu -->
-  <div class="context-menu" id="context-menu" hidden role="menu" aria-label="File actions">
+  <div class="context-menu" id="context-menu" role="menu" aria-label="File actions">
     <button class="ctx-item" data-action="preview" role="menuitem">&#128269; Preview</button>
     <button class="ctx-item" data-action="download" role="menuitem">&#11015; Download</button>
     <button class="ctx-item" data-action="rename" role="menuitem">&#9998; Rename</button>
     <button class="ctx-item" data-action="share" role="menuitem">&#128279; Share</button>
     <button class="ctx-item" data-action="favorite" role="menuitem">&#9733; Favorite</button>
     <button class="ctx-item" data-action="move" role="menuitem">&#128194; Move to Folder</button>
+    <hr class="ctx-divider">
+    <button class="ctx-item" data-action="vault-move" role="menuitem">&#128274; Move to Vault</button>
+    <button class="ctx-item" data-action="vault-restore" role="menuitem" hidden>&#128275; Restore from Vault</button>
     <hr class="ctx-divider">
     <button class="ctx-item danger" data-action="delete" role="menuitem">&#128465; Delete</button>
   </div>
@@ -310,6 +321,61 @@
         <button class="primary-btn" id="move-confirm-btn" type="button">Move</button>
       </div>
     </div>
+  </div>
+
+  <!-- Vault Lock Screen -->
+  <div class="vault-lock-screen" id="vault-lock-screen" hidden role="dialog" aria-modal="true" aria-label="Vault locked">
+    <div class="vault-lock-card">
+      <div class="vault-lock-icon">&#128274;</div>
+      <h2 class="vault-lock-title">Vault Locked</h2>
+      <p class="vault-lock-desc">Your private files are protected.</p>
+      <form id="vault-pin-form" novalidate>
+        <label class="vault-pin-label" for="vault-pin-input">Vault PIN</label>
+        <input type="password" id="vault-pin-input" class="vault-pin-input" maxlength="128" autocomplete="off" inputmode="numeric" placeholder="Enter your PIN" aria-label="Vault PIN" required>
+        <div class="vault-pin-error" id="vault-pin-error" role="alert" hidden>Invalid Vault PIN</div>
+        <button type="submit" class="primary-btn vault-unlock-btn" id="vault-unlock-btn">Unlock</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Vault Unlocked View -->
+  <div class="vault-view" id="vault-view" hidden>
+    <section class="vault-toolbar panel">
+      <div class="vault-toolbar-left">
+        <div class="vault-header-info">
+          <h2 class="vault-header-title">&#128274; Vault</h2>
+          <span class="vault-header-subtitle" id="vault-header-subtitle">Private files</span>
+        </div>
+        <div class="vault-autolock-indicator" id="vault-autolock-indicator">
+          <span class="autolock-label">Auto-lock in</span>
+          <span class="autolock-timer" id="vault-autolock-timer">05:00</span>
+        </div>
+      </div>
+      <div class="vault-toolbar-actions">
+        <button class="soft-btn" id="vault-upload-btn" type="button">Upload</button>
+        <button class="soft-btn" id="vault-new-folder-btn" type="button">+ Folder</button>
+        <button class="soft-btn danger-btn" id="vault-lock-btn" type="button">&#128274; Lock Vault</button>
+      </div>
+    </section>
+    <section class="status-strip" id="vault-status-strip">
+      <div>
+        <strong id="vault-section-title">Vault</strong>
+        <span id="vault-section-subtitle">Private files</span>
+      </div>
+    </section>
+    <section class="content-panel panel">
+      <div class="vault-breadcrumb" id="vault-breadcrumb" role="navigation" aria-label="Vault folder navigation"></div>
+      <div class="empty-state" id="vault-empty-state" hidden>
+        <div class="empty-icon">&#128274;</div>
+        <h3>Your Vault is empty</h3>
+        <p>Move private files here to keep them away from your normal Drive.</p>
+        <div class="empty-actions">
+          <button class="primary-btn" id="vault-empty-goto-drive" type="button">Go to My Drive</button>
+        </div>
+      </div>
+      <div class="files-grid" id="vault-files-grid" role="list" aria-label="Vault files and folders"></div>
+    </section>
+    <input type="file" id="vault-file-input" multiple hidden aria-hidden="true">
   </div>
 
   <!-- Download indicator -->

@@ -125,6 +125,8 @@ def init_db():
             conn.execute("ALTER TABLE file_records ADD COLUMN deleted_at TEXT")
         if "folder_id" not in file_cols:
             conn.execute("ALTER TABLE file_records ADD COLUMN folder_id INTEGER DEFAULT NULL")
+        if "is_vaulted" not in file_cols:
+            conn.execute("ALTER TABLE file_records ADD COLUMN is_vaulted INTEGER NOT NULL DEFAULT 0")
 
         conn.execute(
             """
@@ -147,6 +149,8 @@ def init_db():
             conn.execute("ALTER TABLE folders ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0")
         if "deleted_at" not in folder_cols:
             conn.execute("ALTER TABLE folders ADD COLUMN deleted_at TEXT")
+        if "is_vaulted" not in folder_cols:
+            conn.execute("ALTER TABLE folders ADD COLUMN is_vaulted INTEGER NOT NULL DEFAULT 0")
 
         conn.execute(
             """
@@ -193,6 +197,22 @@ def init_db():
             """
         )
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vault_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL UNIQUE,
+                pin_hash TEXT NOT NULL,
+                vault_enabled INTEGER NOT NULL DEFAULT 1,
+                failed_attempts INTEGER NOT NULL DEFAULT 0,
+                locked_until TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            """
+        )
+
         for stmt in [
             "CREATE INDEX IF NOT EXISTS idx_files_user ON file_records(user_id)",
             "CREATE INDEX IF NOT EXISTS idx_files_user_msg ON file_records(user_id, telegram_message_id)",
@@ -208,6 +228,7 @@ def init_db():
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username IS NOT NULL",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_user_id) WHERE telegram_user_id IS NOT NULL",
             "CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_vault_settings_user ON vault_settings(user_id)",
         ]:
             conn.execute(stmt)
 
@@ -633,14 +654,15 @@ def list_user_shares(user_id):
         ).fetchall())
 
 
-def get_file_stats(user_id):
+def get_file_stats(user_id, exclude_vaulted=False):
+    vault_filter = " AND is_vaulted = 0" if exclude_vaulted else ""
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT COUNT(*) as total, COALESCE(SUM(size), 0) as total_size FROM file_records WHERE user_id = ? AND is_deleted = 0",
+            f"SELECT COUNT(*) as total, COALESCE(SUM(size), 0) as total_size FROM file_records WHERE user_id = ? AND is_deleted = 0{vault_filter}",
             (user_id,),
         ).fetchone()
         cats = rows_to_dicts(conn.execute(
-            """
+            f"""
             SELECT
                 CASE
                     WHEN mime_type LIKE 'image/%' THEN 'images'
@@ -649,7 +671,7 @@ def get_file_stats(user_id):
                     ELSE 'documents'
                 END as category,
                 COUNT(*) as count
-            FROM file_records WHERE user_id = ? AND is_deleted = 0
+            FROM file_records WHERE user_id = ? AND is_deleted = 0{vault_filter}
             GROUP BY category
             """,
             (user_id,),
@@ -746,3 +768,257 @@ def revoke_webdav_token(token_id, user_id):
 def revoke_all_webdav_tokens(user_id):
     with get_connection() as conn:
         conn.execute("DELETE FROM webdav_tokens WHERE user_id = ?", (user_id,))
+
+
+# ---------------------------------------------------------------------------
+# Vault settings
+# ---------------------------------------------------------------------------
+
+def get_vault_settings(user_id):
+    with get_connection() as conn:
+        return row_to_dict(conn.execute(
+            "SELECT * FROM vault_settings WHERE user_id = ?",
+            (user_id,),
+        ).fetchone())
+
+
+def create_vault_settings(user_id, pin_hash):
+    now = utcnow_iso()
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT INTO vault_settings
+               (user_id, pin_hash, vault_enabled, failed_attempts, created_at, updated_at)
+               VALUES (?, ?, 1, 0, ?, ?)""",
+            (user_id, pin_hash, now, now),
+        )
+        return row_to_dict(conn.execute(
+            "SELECT * FROM vault_settings WHERE user_id = ?", (user_id,),
+        ).fetchone())
+
+
+def update_vault_pin(user_id, pin_hash):
+    now = utcnow_iso()
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE vault_settings SET pin_hash = ?, failed_attempts = 0, locked_until = NULL, updated_at = ? WHERE user_id = ?",
+            (pin_hash, now, user_id),
+        )
+
+
+def increment_vault_failed_attempts(user_id):
+    now = utcnow_iso()
+    with get_connection() as conn:
+        settings = conn.execute(
+            "SELECT failed_attempts FROM vault_settings WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        if not settings:
+            return 0
+        new_count = settings["failed_attempts"] + 1
+        locked_until = None
+        if new_count >= 5:
+            progressive_seconds = min(300, 30 * (2 ** (new_count - 5)))
+            from datetime import datetime as _dt, timezone as _tz
+            lock_time = _dt.now(_tz.utc).isoformat()
+            locked_until = lock_time
+        conn.execute(
+            "UPDATE vault_settings SET failed_attempts = ?, locked_until = COALESCE(?, locked_until), updated_at = ? WHERE user_id = ?",
+            (new_count, locked_until, now, user_id),
+        )
+        return new_count
+
+
+def reset_vault_failed_attempts(user_id):
+    now = utcnow_iso()
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE vault_settings SET failed_attempts = 0, locked_until = NULL, updated_at = ? WHERE user_id = ?",
+            (now, user_id),
+        )
+
+
+def set_vault_locked_until(user_id, locked_until):
+    now = utcnow_iso()
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE vault_settings SET locked_until = ?, updated_at = ? WHERE user_id = ?",
+            (locked_until, now, user_id),
+        )
+
+
+def disable_vault(user_id):
+    now = utcnow_iso()
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE vault_settings SET vault_enabled = 0, updated_at = ? WHERE user_id = ?",
+            (now, user_id),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Vault file/folder operations
+# ---------------------------------------------------------------------------
+
+def vault_file(record_id, user_id):
+    """Move a file into the Vault. Sets is_vaulted=1."""
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE file_records SET is_vaulted = 1 WHERE id = ? AND user_id = ? AND is_deleted = 0",
+            (record_id, user_id),
+        )
+        return row_to_dict(conn.execute(
+            "SELECT * FROM file_records WHERE id = ? AND user_id = ?", (record_id, user_id),
+        ).fetchone())
+
+
+def unvault_file(record_id, user_id):
+    """Restore a file from Vault. Sets is_vaulted=0, restores to parent or root."""
+    with get_connection() as conn:
+        file_row = conn.execute(
+            "SELECT folder_id FROM file_records WHERE id = ? AND user_id = ? AND is_deleted = 0",
+            (record_id, user_id),
+        ).fetchone()
+        if not file_row:
+            return None
+        # If parent folder is vaulted, restore to root
+        parent_id = file_row["folder_id"]
+        if parent_id is not None:
+            folder_row = conn.execute(
+                "SELECT is_vaulted FROM folders WHERE id = ? AND user_id = ?",
+                (parent_id, user_id),
+            ).fetchone()
+            if folder_row and folder_row["is_vaulted"]:
+                parent_id = None  # restore to root
+        conn.execute(
+            "UPDATE file_records SET is_vaulted = 0, folder_id = ? WHERE id = ? AND user_id = ?",
+            (parent_id, record_id, user_id),
+        )
+        return row_to_dict(conn.execute(
+            "SELECT * FROM file_records WHERE id = ? AND user_id = ?", (record_id, user_id),
+        ).fetchone())
+
+
+def vault_folder(folder_id, user_id):
+    """Move a folder and all descendants into the Vault."""
+    with get_connection() as conn:
+        # Collect all descendant folder IDs (BFS)
+        to_vault = [folder_id]
+        queue = [folder_id]
+        while queue:
+            current = queue.pop(0)
+            children = conn.execute(
+                "SELECT id FROM folders WHERE parent_id = ? AND user_id = ? AND is_deleted = 0",
+                (current, user_id),
+            ).fetchall()
+            for child in children:
+                to_vault.append(child["id"])
+                queue.append(child["id"])
+        # Vault all folders
+        placeholders = ",".join("?" * len(to_vault))
+        conn.execute(
+            f"UPDATE folders SET is_vaulted = 1 WHERE id IN ({placeholders}) AND user_id = ?",
+            (*to_vault, user_id),
+        )
+        # Vault all files in all these folders
+        conn.execute(
+            f"UPDATE file_records SET is_vaulted = 1 WHERE folder_id IN ({placeholders}) AND user_id = ? AND is_deleted = 0",
+            (*to_vault, user_id),
+        )
+        return to_vault
+
+
+def unvault_folder(folder_id, user_id):
+    """Restore a folder and all descendants from Vault."""
+    with get_connection() as conn:
+        # Collect all descendant folder IDs (BFS)
+        to_unvault = [folder_id]
+        queue = [folder_id]
+        while queue:
+            current = queue.pop(0)
+            children = conn.execute(
+                "SELECT id FROM folders WHERE parent_id = ? AND user_id = ? AND is_deleted = 0",
+                (current, user_id),
+            ).fetchall()
+            for child in children:
+                to_unvault.append(child["id"])
+                queue.append(child["id"])
+        # Unvault all folders
+        placeholders = ",".join("?" * len(to_unvault))
+        conn.execute(
+            f"UPDATE folders SET is_vaulted = 0 WHERE id IN ({placeholders}) AND user_id = ?",
+            (*to_unvault, user_id),
+        )
+        # Unvault all files in all these folders
+        conn.execute(
+            f"UPDATE file_records SET is_vaulted = 0 WHERE folder_id IN ({placeholders}) AND user_id = ? AND is_deleted = 0",
+            (*to_unvault, user_id),
+        )
+        return to_unvault
+
+
+def list_vaulted_files(user_id):
+    """List all vaulted (non-deleted) files for a user."""
+    with get_connection() as conn:
+        return rows_to_dicts(conn.execute(
+            "SELECT * FROM file_records WHERE user_id = ? AND is_deleted = 0 AND is_vaulted = 1 ORDER BY uploaded_at DESC",
+            (user_id,),
+        ).fetchall())
+
+
+def list_vaulted_root_files(user_id):
+    """List vaulted files at root level (not in any folder)."""
+    with get_connection() as conn:
+        return rows_to_dicts(conn.execute(
+            "SELECT * FROM file_records WHERE user_id = ? AND is_deleted = 0 AND is_vaulted = 1 AND folder_id IS NULL ORDER BY uploaded_at DESC",
+            (user_id,),
+        ).fetchall())
+
+
+def list_vaulted_folders(user_id, parent_id=None):
+    """List vaulted folders at a given parent level."""
+    with get_connection() as conn:
+        return rows_to_dicts(conn.execute(
+            "SELECT * FROM folders WHERE user_id = ? AND is_deleted = 0 AND is_vaulted = 1 AND parent_id IS ? ORDER BY name",
+            (user_id, parent_id),
+        ).fetchall())
+
+
+def is_file_vaulted(record_id, user_id):
+    """Check if a file is vaulted."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT is_vaulted FROM file_records WHERE id = ? AND user_id = ? AND is_deleted = 0",
+            (record_id, user_id),
+        ).fetchone()
+        return bool(row and row["is_vaulted"])
+
+
+def is_folder_vaulted(folder_id, user_id):
+    """Check if a folder is vaulted (or has a vaulted ancestor)."""
+    with get_connection() as conn:
+        current_id = folder_id
+        while current_id is not None:
+            row = conn.execute(
+                "SELECT is_vaulted, parent_id FROM folders WHERE id = ? AND user_id = ?",
+                (current_id, user_id),
+            ).fetchone()
+            if not row:
+                return False
+            if row["is_vaulted"]:
+                return True
+            current_id = row["parent_id"]
+        return False
+
+
+def get_vault_stats(user_id):
+    """Get vault file/folder counts."""
+    with get_connection() as conn:
+        file_count = conn.execute(
+            "SELECT COUNT(*) as cnt FROM file_records WHERE user_id = ? AND is_deleted = 0 AND is_vaulted = 1",
+            (user_id,),
+        ).fetchone()["cnt"]
+        folder_count = conn.execute(
+            "SELECT COUNT(*) as cnt FROM folders WHERE user_id = ? AND is_deleted = 0 AND is_vaulted = 1",
+            (user_id,),
+        ).fetchone()["cnt"]
+        return {"files": file_count, "folders": folder_count}

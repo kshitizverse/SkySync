@@ -116,9 +116,15 @@ function setupEventListeners() {
     btn.addEventListener('click', () => {
       const view = btn.dataset.view;
       if (!view) return;
+      if (view === 'vault') {
+        openVault();
+        closeSidebar();
+        return;
+      }
       state.currentView = view;
       document.querySelectorAll('.sidebar-nav .nav-item').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
+      showMainViews();
       loadViewData(view);
       closeSidebar();
     });
@@ -223,6 +229,17 @@ function setupContextMenu() {
     const file = state.files.find(f => f.id === fileId);
     if (!file) return;
     state.contextTarget = file;
+
+    const vaultMoveBtn = menu.querySelector('[data-action="vault-move"]');
+    const vaultRestoreBtn = menu.querySelector('[data-action="vault-restore"]');
+    if (file.is_vaulted) {
+      vaultMoveBtn.hidden = true;
+      vaultRestoreBtn.hidden = false;
+    } else {
+      vaultMoveBtn.hidden = false;
+      vaultRestoreBtn.hidden = true;
+    }
+
     menu.hidden = false;
     menu.style.left = `${Math.min(e.clientX, window.innerWidth - 200)}px`;
     menu.style.top = `${Math.min(e.clientY, window.innerHeight - 250)}px`;
@@ -752,6 +769,24 @@ function handleFileAction(action, file) {
     case 'restore': restoreSingleFile(file); break;
     case 'permanent-delete': permanentDeleteSingleFile(file); break;
     case 'move': openMoveModal(file); break;
+    case 'vault-move': vaultMoveFile(file); break;
+    case 'vault-restore': vaultRestoreFile(file); break;
+  }
+}
+
+async function vaultMoveFile(file) {
+  const ok = await showConfirm('Move to Vault?', `"${file.name}" will be hidden and protected.`, 'Move');
+  if (!ok) return;
+  try {
+    await fetchJSON('/api/vault/move', { method: 'POST', body: JSON.stringify({ type: 'file', id: file.id }) });
+    state.files = state.files.filter(f => f.id !== file.id);
+    state.allFiles = state.allFiles.filter(f => f.id !== file.id);
+    state.selection.delete(file.id);
+    renderStats();
+    renderWorkspace();
+    showToast('File moved to vault', 'success');
+  } catch (error) {
+    showToast(error.message || 'Failed to move to vault', 'error');
   }
 }
 
@@ -1513,3 +1548,612 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   }
 });
+
+/* ==========================================================================
+   Smart Vault UI
+   ========================================================================== */
+
+const vaultState = {
+  configured: false,
+  unlocked: false,
+  files: [],
+  folders: [],
+  breadcrumb: [],
+  currentFolderId: null,
+  autoLockTimer: null,
+  autoLockSeconds: 300,
+  autoLockRemaining: 300,
+};
+
+function setupVaultEventListeners() {
+  var vaultNavBtn = document.getElementById('vault-nav-btn');
+  if (vaultNavBtn) {
+    vaultNavBtn.addEventListener('click', openVault);
+  }
+
+  var vaultPinForm = document.getElementById('vault-pin-form');
+  if (vaultPinForm) {
+    vaultPinForm.addEventListener('submit', function(e) {
+      e.preventDefault();
+      attemptVaultUnlock();
+    });
+  }
+
+  var vaultLockBtn = document.getElementById('vault-lock-btn');
+  if (vaultLockBtn) {
+    vaultLockBtn.addEventListener('click', lockVaultConfirm);
+  }
+
+  var vaultUploadBtn = document.getElementById('vault-upload-btn');
+  if (vaultUploadBtn) {
+    vaultUploadBtn.addEventListener('click', function() {
+      document.getElementById('vault-file-input').click();
+    });
+  }
+
+  var vaultFileInput = document.getElementById('vault-file-input');
+  if (vaultFileInput) {
+    vaultFileInput.addEventListener('change', function(e) {
+      handleVaultUpload(Array.from(e.target.files || []));
+      e.target.value = '';
+    });
+  }
+
+  var vaultNewFolderBtn = document.getElementById('vault-new-folder-btn');
+  if (vaultNewFolderBtn) {
+    vaultNewFolderBtn.addEventListener('click', createVaultFolder);
+  }
+
+  var vaultEmptyGoto = document.getElementById('vault-empty-goto-drive');
+  if (vaultEmptyGoto) {
+    vaultEmptyGoto.addEventListener('click', function() {
+      navigateToFiles();
+    });
+  }
+}
+
+document.addEventListener('DOMContentLoaded', setupVaultEventListeners);
+
+async function openVault() {
+  if (state.currentView === 'vault') return;
+  state.currentView = 'vault';
+  vaultState.currentFolderId = null;
+  document.querySelectorAll('.sidebar-nav .nav-item').forEach(function(b) { b.classList.remove('active'); });
+  var vaultBtn = document.getElementById('vault-nav-btn');
+  if (vaultBtn) vaultBtn.classList.add('active');
+
+  hideAllViews();
+  document.getElementById('vault-view').hidden = true;
+  document.getElementById('vault-lock-screen').hidden = true;
+
+  var status = await checkVaultStatus();
+  if (!status.configured) {
+    showVaultNotConfigured();
+    return;
+  }
+  if (!status.unlocked) {
+    showVaultLockScreen();
+    return;
+  }
+  vaultState.configured = true;
+  vaultState.unlocked = true;
+  showVaultUnlocked();
+  await loadVaultData();
+}
+
+async function checkVaultStatus() {
+  try {
+    var data = await fetchJSON('/api/vault/status');
+    vaultState.configured = data.configured;
+    vaultState.unlocked = data.unlocked;
+    updateVaultNav();
+    return data;
+  } catch (e) {
+    return { configured: false, unlocked: false };
+  }
+}
+
+function updateVaultNav() {
+  var icon = document.getElementById('vault-nav-icon');
+  var subtitle = document.getElementById('vault-nav-subtitle');
+  var btn = document.getElementById('vault-nav-btn');
+  if (!icon || !subtitle || !btn) return;
+
+  if (vaultState.unlocked) {
+    icon.innerHTML = '&#128275;';
+    subtitle.textContent = vaultState.files.length + ' items';
+    btn.classList.add('vault-unlocked');
+  } else {
+    icon.innerHTML = '&#128274;';
+    subtitle.textContent = vaultState.configured ? 'Locked' : 'Not set up';
+    btn.classList.remove('vault-unlocked');
+  }
+}
+
+function hideAllViews() {
+  var mainPanel = document.querySelector('.main-panel');
+  if (mainPanel) {
+    var sections = mainPanel.querySelectorAll('.stats-row, .toolbar.panel, .content-panel, .status-strip');
+    sections.forEach(function(s) { s.hidden = true; });
+    var header = mainPanel.querySelector('.dashboard-header');
+    if (header) header.hidden = true;
+  }
+}
+
+function showMainViews() {
+  var mainPanel = document.querySelector('.main-panel');
+  if (mainPanel) {
+    var sections = mainPanel.querySelectorAll('.stats-row, .toolbar.panel, .content-panel, .status-strip');
+    sections.forEach(function(s) { s.hidden = false; });
+    var header = mainPanel.querySelector('.dashboard-header');
+    if (header) header.hidden = false;
+  }
+  document.getElementById('vault-view').hidden = true;
+  document.getElementById('vault-lock-screen').hidden = true;
+}
+
+function showVaultLockScreen() {
+  document.getElementById('vault-view').hidden = true;
+  var lockScreen = document.getElementById('vault-lock-screen');
+  lockScreen.hidden = false;
+  var pinInput = document.getElementById('vault-pin-input');
+  if (pinInput) {
+    pinInput.value = '';
+    pinInput.focus();
+  }
+  var errorEl = document.getElementById('vault-pin-error');
+  if (errorEl) errorEl.hidden = true;
+}
+
+function showVaultUnlocked() {
+  document.getElementById('vault-lock-screen').hidden = true;
+  document.getElementById('vault-view').hidden = false;
+  startAutoLockTimer();
+}
+
+function showVaultNotConfigured() {
+  document.getElementById('vault-view').hidden = true;
+  var lockScreen = document.getElementById('vault-lock-screen');
+  lockScreen.hidden = false;
+  var card = lockScreen.querySelector('.vault-lock-card');
+  if (card) {
+    card.innerHTML = '<div class="vault-lock-icon">&#128274;</div>' +
+      '<h2 class="vault-lock-title">Vault Not Set Up</h2>' +
+      '<p class="vault-lock-desc">Go to Settings to set up your Vault PIN.</p>';
+  }
+}
+
+async function attemptVaultUnlock() {
+  var pinInput = document.getElementById('vault-pin-input');
+  var errorEl = document.getElementById('vault-pin-error');
+  var unlockBtn = document.getElementById('vault-unlock-btn');
+
+  var pin = pinInput.value;
+  if (!pin) {
+    errorEl.hidden = false;
+    return;
+  }
+
+  unlockBtn.disabled = true;
+  unlockBtn.textContent = 'Unlocking...';
+  errorEl.hidden = true;
+
+  try {
+    var data = await fetchJSON('/api/vault/unlock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: pin })
+    });
+    if (data.success) {
+      vaultState.unlocked = true;
+      vaultState.configured = true;
+      updateVaultNav();
+      showVaultUnlocked();
+      await loadVaultData();
+    } else {
+      errorEl.textContent = 'Invalid Vault PIN';
+      errorEl.hidden = false;
+      pinInput.value = '';
+      pinInput.focus();
+    }
+  } catch (e) {
+    errorEl.textContent = 'Invalid Vault PIN';
+    errorEl.hidden = false;
+    pinInput.value = '';
+    pinInput.focus();
+  } finally {
+    unlockBtn.disabled = false;
+    unlockBtn.textContent = 'Unlock';
+  }
+}
+
+async function loadVaultData() {
+  try {
+    var url = '/api/files?view=vault';
+    if (vaultState.currentFolderId) {
+      url += '&folder_id=' + vaultState.currentFolderId;
+    }
+    var result = await fetchJSON(url);
+    vaultState.files = normalizeFiles(result.files || []);
+    vaultState.folders = result.folders || [];
+    updateVaultNav();
+    renderVaultView();
+    if (vaultState.currentFolderId) {
+      await loadVaultBreadcrumb(vaultState.currentFolderId);
+    } else {
+      vaultState.breadcrumb = [];
+      renderVaultBreadcrumb();
+    }
+  } catch (e) {
+    if (e.message && e.message.toLowerCase().includes('vault')) {
+      forceVaultLock();
+    }
+  }
+}
+
+function renderVaultView() {
+  var grid = document.getElementById('vault-files-grid');
+  var emptyState = document.getElementById('vault-empty-state');
+  var subtitle = document.getElementById('vault-header-subtitle');
+  var titleEl = document.getElementById('vault-section-title');
+  var subEl = document.getElementById('vault-section-subtitle');
+
+  var totalItems = vaultState.files.length + vaultState.folders.length;
+  if (subtitle) subtitle.textContent = totalItems + ' item' + (totalItems === 1 ? '' : 's');
+  if (titleEl) titleEl.textContent = 'Vault';
+  if (subEl) subEl.textContent = totalItems + ' item' + (totalItems === 1 ? '' : 's');
+
+  grid.innerHTML = '';
+
+  if (totalItems === 0) {
+    emptyState.hidden = false;
+    grid.hidden = true;
+    return;
+  }
+
+  emptyState.hidden = true;
+  grid.hidden = false;
+  var fragment = document.createDocumentFragment();
+
+  vaultState.folders.forEach(function(folder) {
+    var card = document.createElement('article');
+    card.className = 'file-card folder-card';
+    card.dataset.folderId = folder.id;
+    var itemCount = folder.item_count || 0;
+    var itemLabel = itemCount === 1 ? 'item' : 'items';
+    card.innerHTML =
+      '<div class="file-media folder-media">' +
+        '<div class="folder-icon">' +
+          '<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
+            '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>' +
+          '</svg>' +
+        '</div>' +
+      '</div>' +
+      '<div class="file-info folder-info">' +
+        '<div class="file-name folder-name" title="' + escapeHtml(folder.name) + '">' + escapeHtml(folder.name) + '</div>' +
+        '<div class="file-meta folder-meta">' + itemCount + ' ' + itemLabel + '</div>' +
+      '</div>' +
+      '<div class="file-actions folder-actions">' +
+        '<button class="soft-btn small folder-open-btn" type="button">Open</button>' +
+        '<button class="soft-btn small vault-restore-folder-btn" type="button">Restore</button>' +
+      '</div>';
+    card.querySelector('.folder-open-btn').addEventListener('click', function() { navigateVaultFolder(folder.id); });
+    card.querySelector('.vault-restore-folder-btn').addEventListener('click', function() { vaultRestoreFolder(folder.id, folder.name); });
+    card.addEventListener('dblclick', function() { navigateVaultFolder(folder.id); });
+    fragment.appendChild(card);
+  });
+
+  vaultState.files.forEach(function(file) {
+    fragment.appendChild(renderVaultFileCard(file));
+  });
+
+  grid.appendChild(fragment);
+}
+
+function renderVaultFileCard(file) {
+  var article = document.createElement('article');
+  article.className = 'file-card';
+  article.dataset.fileId = file.id;
+
+  var glyph = fileGlyph(file.category);
+  var isImage = file.type === 'image';
+  var isVideo = file.type === 'video';
+  var isAudio = file.type === 'audio';
+
+  var mediaContent = '';
+  if (isImage) {
+    mediaContent = '<img src="' + previewUrl(file.id) + '" alt="' + escapeHtml(file.name) + '" class="file-thumb" loading="lazy">';
+  } else if (isVideo) {
+    mediaContent = '<div class="file-glyph">' + glyph + '</div>';
+  } else {
+    mediaContent = '<div class="file-glyph">' + glyph + '</div>';
+  }
+
+  article.innerHTML =
+    '<div class="file-media">' + mediaContent + '</div>' +
+    '<div class="file-info">' +
+      '<div class="file-name" title="' + escapeHtml(file.name) + '">' + escapeHtml(file.name) + '</div>' +
+      '<div class="file-meta">' + formatSize(file.size || 0) + ' &middot; ' + formatDate(file.date) + '</div>' +
+    '</div>' +
+    '<div class="file-actions">' +
+      '<button class="soft-btn small" type="button" data-action="preview" title="Preview">&#128269;</button>' +
+      '<button class="soft-btn small" type="button" data-action="download" title="Download">&#11015;</button>' +
+      '<button class="soft-btn small" type="button" data-action="vault-restore" title="Restore to My Drive">&#128275;</button>' +
+    '</div>';
+
+  article.querySelector('[data-action="preview"]').addEventListener('click', function() { openPreview(file); });
+  article.querySelector('[data-action="download"]').addEventListener('click', function() {
+    showDownloadIndicator(file.name);
+    var a = document.createElement('a');
+    a.href = downloadUrl(file.id);
+    a.download = file.name;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(hideDownloadIndicator, 5000);
+  });
+  article.querySelector('[data-action="vault-restore"]').addEventListener('click', function() { vaultRestoreFile(file); });
+
+  return article;
+}
+
+function navigateVaultFolder(folderId) {
+  vaultState.currentFolderId = folderId;
+  history.pushState({ vaultFolderId: folderId }, '', '?vault_folder=' + folderId);
+  loadVaultData();
+}
+
+async function loadVaultBreadcrumb(folderId) {
+  try {
+    var result = await fetchJSON('/api/folders/' + folderId + '/breadcrumb');
+    vaultState.breadcrumb = result.breadcrumb || [];
+    renderVaultBreadcrumb();
+  } catch (e) {
+    vaultState.breadcrumb = [];
+    renderVaultBreadcrumb();
+  }
+}
+
+function renderVaultBreadcrumb() {
+  var el = document.getElementById('vault-breadcrumb');
+  if (!el) return;
+  if (!vaultState.breadcrumb.length && !vaultState.currentFolderId) {
+    el.innerHTML = '';
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = 'flex';
+  var html = '<span class="crumb" data-vault-folder="__root__">Vault</span>';
+  vaultState.breadcrumb.forEach(function(b, i) {
+    html += ' <span class="crumb-sep">/</span> ';
+    if (i === vaultState.breadcrumb.length - 1) {
+      html += '<span class="crumb current">' + escapeHtml(b.name) + '</span>';
+    } else {
+      html += '<span class="crumb" data-vault-folder="' + b.id + '">' + escapeHtml(b.name) + '</span>';
+    }
+  });
+  el.innerHTML = html;
+  el.querySelectorAll('.crumb[data-vault-folder]').forEach(function(span) {
+    span.addEventListener('click', function() {
+      var fid = this.dataset.vaultFolder;
+      vaultNavigateBreadcrumb(fid === '__root__' ? null : parseInt(fid));
+    });
+  });
+}
+
+function vaultNavigateBreadcrumb(folderId) {
+  vaultState.currentFolderId = folderId;
+  if (folderId) {
+    history.pushState({ vaultFolderId: folderId }, '', '?vault_folder=' + folderId);
+  } else {
+    history.pushState({ vaultFolderId: null }, '', location.pathname);
+  }
+  loadVaultData();
+}
+
+async function attemptVaultUnlock() {
+  var pinInput = document.getElementById('vault-pin-input');
+  var errorEl = document.getElementById('vault-pin-error');
+  var unlockBtn = document.getElementById('vault-unlock-btn');
+
+  var pin = pinInput.value;
+  if (!pin) {
+    errorEl.hidden = false;
+    return;
+  }
+
+  unlockBtn.disabled = true;
+  unlockBtn.textContent = 'Unlocking...';
+  errorEl.hidden = true;
+
+  try {
+    var data = await fetchJSON('/api/vault/unlock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: pin })
+    });
+    if (data.success) {
+      vaultState.unlocked = true;
+      vaultState.configured = true;
+      updateVaultNav();
+      showVaultUnlocked();
+      await loadVaultData();
+    } else {
+      errorEl.textContent = 'Invalid Vault PIN';
+      errorEl.hidden = false;
+      pinInput.value = '';
+      pinInput.focus();
+    }
+  } catch (e) {
+    errorEl.textContent = 'Invalid Vault PIN';
+    errorEl.hidden = false;
+    pinInput.value = '';
+    pinInput.focus();
+  } finally {
+    unlockBtn.disabled = false;
+    unlockBtn.textContent = 'Unlock';
+  }
+}
+
+async function vaultRestoreFile(file) {
+  var ok = await showConfirm('Restore from Vault?', '"' + file.name + '" will be restored to My Drive.', 'Restore');
+  if (!ok) return;
+  try {
+    await fetchJSON('/api/vault/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'file', id: file.id })
+    });
+    showToast('Restored to My Drive', 'success');
+    await loadVaultData();
+  } catch (e) {
+    showToast(e.message || 'Failed to restore', 'error');
+  }
+}
+
+async function vaultRestoreFolder(folderId, folderName) {
+  var ok = await showConfirm('Restore folder from Vault?', '"' + folderName + '" and its contents will be restored.', 'Restore');
+  if (!ok) return;
+  try {
+    await fetchJSON('/api/vault/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'folder', id: folderId })
+    });
+    showToast('Restored to My Drive', 'success');
+    await loadVaultData();
+  } catch (e) {
+    showToast(e.message || 'Failed to restore', 'error');
+  }
+}
+
+async function lockVaultConfirm() {
+  var ok = await showConfirm('Lock Vault?', 'This will immediately hide your private files.', 'Lock Everything');
+  if (!ok) return;
+  await lockVault();
+}
+
+async function lockVault() {
+  try {
+    await fetchJSON('/api/vault/lock', { method: 'POST' });
+  } catch (e) { /* ignore */ }
+  forceVaultLock();
+}
+
+function forceVaultLock() {
+  vaultState.unlocked = false;
+  vaultState.files = [];
+  vaultState.folders = [];
+  vaultState.breadcrumb = [];
+  vaultState.currentFolderId = null;
+  stopAutoLockTimer();
+  updateVaultNav();
+  if (state.currentView === 'vault') {
+    showVaultLockScreen();
+  }
+}
+
+function startAutoLockTimer() {
+  stopAutoLockTimer();
+  vaultState.autoLockRemaining = vaultState.autoLockSeconds;
+  updateAutoLockDisplay();
+  vaultState.autoLockTimer = setInterval(function() {
+    vaultState.autoLockRemaining--;
+    updateAutoLockDisplay();
+    if (vaultState.autoLockRemaining <= 0) {
+      forceVaultLock();
+      showToast('Vault auto-locked due to inactivity', 'info');
+    }
+  }, 1000);
+}
+
+function stopAutoLockTimer() {
+  if (vaultState.autoLockTimer) {
+    clearInterval(vaultState.autoLockTimer);
+    vaultState.autoLockTimer = null;
+  }
+}
+
+function updateAutoLockDisplay() {
+  var timerEl = document.getElementById('vault-autolock-timer');
+  if (!timerEl) return;
+  var mins = Math.floor(vaultState.autoLockRemaining / 60);
+  var secs = vaultState.autoLockRemaining % 60;
+  timerEl.textContent = String(mins).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
+}
+
+function resetAutoLockTimer() {
+  if (vaultState.unlocked) {
+    vaultState.autoLockRemaining = vaultState.autoLockSeconds;
+    updateAutoLockDisplay();
+  }
+}
+
+function navigateToFiles() {
+  state.currentView = 'files';
+  state.currentFolderId = null;
+  document.querySelectorAll('.sidebar-nav .nav-item').forEach(function(b) { b.classList.remove('active'); });
+  var filesBtn = document.querySelector('[data-view="files"]');
+  if (filesBtn) filesBtn.classList.add('active');
+  showMainViews();
+  history.pushState({}, '', location.pathname);
+  loadViewData('files');
+}
+
+async function handleVaultUpload(files) {
+  if (!files.length) return;
+  for (var i = 0; i < files.length; i++) {
+    var file = files[i];
+    var formData = new FormData();
+    formData.append('file', file);
+    if (vaultState.currentFolderId) {
+      formData.append('folder_id', vaultState.currentFolderId);
+    }
+    try {
+      await fetchJSON('/api/files/upload', { method: 'POST', body: formData });
+      showToast('Uploaded ' + file.name, 'success');
+    } catch (e) {
+      showToast(e.message || 'Upload failed', 'error');
+    }
+  }
+  await loadVaultData();
+}
+
+async function createVaultFolder() {
+  var name = await showPrompt('New folder', 'Enter a name for the new folder.', 'Folder name');
+  if (!name || !name.trim()) return;
+  try {
+    await fetchJSON('/api/folders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim(), parent_id: vaultState.currentFolderId })
+    });
+    showToast('Folder created', 'success');
+    await loadVaultData();
+  } catch (e) {
+    showToast(e.message || 'Failed to create folder', 'error');
+  }
+}
+
+window.addEventListener('popstate', function(e) {
+  if (state.currentView === 'vault') {
+    var params = new URLSearchParams(window.location.search);
+    var vfid = params.get('vault_folder');
+    vaultState.currentFolderId = vfid ? parseInt(vfid) : null;
+    loadVaultData();
+  }
+});
+
+(function interceptVaultFetch() {
+  var origFetchJSON = window.fetchJSON;
+  if (!origFetchJSON) return;
+  window.fetchJSON = function(url, options) {
+    return origFetchJSON(url, options).catch(function(err) {
+      if (err && err.message && err.message.toLowerCase().includes('vault is locked')) {
+        forceVaultLock();
+      }
+      throw err;
+    });
+  };
+})();

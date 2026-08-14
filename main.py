@@ -317,6 +317,9 @@ def _setup_webdav():
 
 _setup_webdav()
 
+from vault import vault_bp
+app.register_blueprint(vault_bp)
+
 
 def cleanup_old_previews():
     try:
@@ -335,6 +338,7 @@ def cleanup_old_previews():
 cleanup_old_previews()
 
 rate_limit = RateLimitStore()
+app.config["RATE_LIMIT_STORE"] = rate_limit
 
 UPLOAD_RATE_WINDOW = timedelta(minutes=1)
 UPLOAD_MAX_PER_WINDOW = 20
@@ -983,6 +987,13 @@ def get_files():
             records = [r for r in records if not dict(r).get("folder_id")]
             folders = list_user_folders(user["id"], parent_id=None)
 
+    # Filter out vaulted items from normal/favorites/trash views
+    from vault import vault_is_unlocked
+    vault_open = vault_is_unlocked(user["id"])
+    if not vault_open:
+        records = [r for r in records if not dict(r).get("is_vaulted")]
+        folders = [f for f in folders if not dict(f).get("is_vaulted")]
+
     files = [file_record_to_api(r) for r in records]
 
     for folder in folders:
@@ -1000,7 +1011,7 @@ def get_files():
     end = start + per_page
     files = files[start:end]
 
-    stats = get_file_stats(user["id"])
+    stats = get_file_stats(user["id"], exclude_vaulted=not vault_open)
     return jsonify({
         "success": True,
         "files": files,
@@ -1104,6 +1115,11 @@ def download_file(file_id):
     if not record or record.get("is_deleted"):
         return jsonify({"success": False, "error": "File not found"}), 404
 
+    if record.get("is_vaulted"):
+        from vault import vault_is_unlocked
+        if not vault_is_unlocked(user["id"]):
+            return jsonify({"success": False, "error": "Vault is locked"}), 403
+
     cached = create_telegram_handler_for_user(user)
     if not cached:
         return jsonify({"success": False, "error": "Telegram storage is not configured"}), 503
@@ -1134,6 +1150,11 @@ def preview_file(file_id):
     record = get_user_file_record(file_id, user["id"])
     if not record or record.get("is_deleted"):
         return jsonify({"success": False, "error": "File not found"}), 404
+
+    if record.get("is_vaulted"):
+        from vault import vault_is_unlocked
+        if not vault_is_unlocked(user["id"]):
+            return jsonify({"success": False, "error": "Vault is locked"}), 403
 
     mime_type = (record.get("mime_type") or "").lower()
     if not (mime_type.startswith("image/") or mime_type.startswith("video/") or mime_type.startswith("audio/")):
@@ -1169,6 +1190,11 @@ def delete_file(file_id):
     if not record or record.get("is_deleted"):
         return jsonify({"success": False, "error": "File not found"}), 404
 
+    if record.get("is_vaulted"):
+        from vault import vault_is_unlocked
+        if not vault_is_unlocked(user["id"]):
+            return jsonify({"success": False, "error": "Vault is locked"}), 403
+
     soft_delete_file(file_id, user["id"])
     log_activity(user["id"], "trash", detail=record["filename"], ip_address=client_ip())
     return jsonify({"success": True, "message": "File moved to trash"}), 200
@@ -1183,6 +1209,11 @@ def rename_file(file_id):
     record = get_user_file_record(file_id, user["id"])
     if not record or record.get("is_deleted"):
         return jsonify({"success": False, "error": "File not found"}), 404
+
+    if record.get("is_vaulted"):
+        from vault import vault_is_unlocked
+        if not vault_is_unlocked(user["id"]):
+            return jsonify({"success": False, "error": "Vault is locked"}), 403
 
     data = request.json or {}
     new_name = sanitize_filename((data.get("name") or "").strip())
@@ -1210,6 +1241,11 @@ def toggle_file_favorite(file_id):
     record = get_user_file_record(file_id, user["id"])
     if not record or record.get("is_deleted"):
         return jsonify({"success": False, "error": "File not found"}), 404
+
+    if record.get("is_vaulted"):
+        from vault import vault_is_unlocked
+        if not vault_is_unlocked(user["id"]):
+            return jsonify({"success": False, "error": "Vault is locked"}), 403
 
     updated = toggle_favorite(file_id, user["id"])
     if not updated:
@@ -1246,6 +1282,11 @@ def permanent_delete_file_endpoint(file_id):
     if not record or not record.get("is_deleted"):
         return jsonify({"success": False, "error": "File not found in trash"}), 404
 
+    if record.get("is_vaulted"):
+        from vault import vault_is_unlocked
+        if not vault_is_unlocked(user["id"]):
+            return jsonify({"success": False, "error": "Vault is locked"}), 403
+
     cached = create_telegram_handler_for_user(user)
     if cached:
         try:
@@ -1271,6 +1312,8 @@ def bulk_delete_files():
     if len(file_ids) > 100:
         return jsonify({"success": False, "error": "Too many files. Maximum 100 per batch."}), 400
 
+    from vault import vault_is_unlocked
+    vault_open = vault_is_unlocked(user["id"])
     deleted = 0
     for fid in file_ids[:100]:
         try:
@@ -1279,6 +1322,8 @@ def bulk_delete_files():
             continue
         record = get_user_file_record(fid_int, user["id"])
         if record and not record.get("is_deleted"):
+            if record.get("is_vaulted") and not vault_open:
+                continue
             soft_delete_file(fid_int, user["id"])
             deleted += 1
 
@@ -1322,6 +1367,11 @@ def create_file_share(file_id):
     record = get_user_file_record(file_id, user["id"])
     if not record or record.get("is_deleted"):
         return jsonify({"success": False, "error": "File not found"}), 404
+
+    if record.get("is_vaulted"):
+        from vault import vault_is_unlocked
+        if not vault_is_unlocked(user["id"]):
+            return jsonify({"success": False, "error": "Vault is locked"}), 403
 
     data = request.json or {}
     can_view = data.get("can_view", True)
@@ -1415,6 +1465,9 @@ def shared_download(token):
     if not record:
         return jsonify({"success": False, "error": "File not found"}), 404
 
+    if record.get("is_vaulted"):
+        return jsonify({"success": False, "error": "Access denied"}), 403
+
     owner = get_user_by_id(record["user_id"])
     cached = create_telegram_handler_for_user(owner) if owner else None
     if not cached:
@@ -1457,6 +1510,9 @@ def shared_preview(token):
     if not record:
         return jsonify({"success": False, "error": "File not found"}), 404
 
+    if record.get("is_vaulted"):
+        return jsonify({"success": False, "error": "Access denied"}), 403
+
     mime_type = (record.get("mime_type") or "").lower()
     if not (mime_type.startswith("image/") or mime_type.startswith("video/") or mime_type.startswith("audio/")):
         return jsonify({"success": False, "error": "Preview not available"}), 400
@@ -1490,7 +1546,8 @@ def get_profile():
     name = (session.get("name") or "").strip()
     if not name:
         name = (user["name"] or "").strip()
-    stats = get_file_stats(user["id"])
+    from vault import vault_is_unlocked
+    stats = get_file_stats(user["id"], exclude_vaulted=not vault_is_unlocked(user["id"]))
     token_count = len(list_webdav_tokens(user["id"]))
     return jsonify({
         "success": True,
@@ -1641,6 +1698,12 @@ def list_folders():
         except (ValueError, TypeError):
             parent_id = None
     folders = list_user_folders(user["id"], parent_id=parent_id)
+
+    from vault import vault_is_unlocked
+    vault_open = vault_is_unlocked(user["id"])
+    if not vault_open:
+        folders = [f for f in folders if not f.get("is_vaulted")]
+
     for folder in folders:
         folder["item_count"] = count_folder_items(user["id"], folder["id"])
     return jsonify({"success": True, "folders": folders}), 200
@@ -1676,6 +1739,12 @@ def rename_folder_endpoint(folder_id):
     folder = get_folder(folder_id, user["id"])
     if not folder:
         return jsonify({"success": False, "error": "Folder not found"}), 404
+
+    if folder.get("is_vaulted"):
+        from vault import vault_is_unlocked
+        if not vault_is_unlocked(user["id"]):
+            return jsonify({"success": False, "error": "Vault is locked"}), 403
+
     data = request_payload()
     new_name = (data.get("name") or "").strip()
     if not new_name:
@@ -1693,6 +1762,12 @@ def delete_folder_endpoint(folder_id):
     folder = get_folder(folder_id, user["id"])
     if not folder:
         return jsonify({"success": False, "error": "Folder not found"}), 404
+
+    if folder.get("is_vaulted"):
+        from vault import vault_is_unlocked
+        if not vault_is_unlocked(user["id"]):
+            return jsonify({"success": False, "error": "Vault is locked"}), 403
+
     soft_delete_folder(folder_id, user["id"])
     log_activity(user["id"], "folder_delete", detail=f"Deleted folder: {folder['name']}", ip_address=client_ip())
     return jsonify({"success": True, "message": "Folder moved to trash"}), 200
@@ -1713,6 +1788,13 @@ def permanent_delete_folder_endpoint(folder_id):
     user = require_auth()
     if not user:
         return jsonify({"success": False, "error": "Unauthorized"}), 401
+
+    folder = get_folder(folder_id, user["id"])
+    if folder and folder.get("is_vaulted"):
+        from vault import vault_is_unlocked
+        if not vault_is_unlocked(user["id"]):
+            return jsonify({"success": False, "error": "Vault is locked"}), 403
+
     permanent_delete_folder(folder_id, user["id"])
     log_activity(user["id"], "folder_permanent_delete", detail=f"Permanently deleted folder {folder_id}", ip_address=client_ip())
     return jsonify({"success": True, "message": "Folder permanently deleted"}), 200
@@ -1735,6 +1817,12 @@ def move_file_endpoint(file_id):
     file = get_user_file_record(file_id, user["id"])
     if not file:
         return jsonify({"success": False, "error": "File not found"}), 404
+
+    if file.get("is_vaulted"):
+        from vault import vault_is_unlocked
+        if not vault_is_unlocked(user["id"]):
+            return jsonify({"success": False, "error": "Vault is locked"}), 403
+
     data = request_payload()
     folder_id = data.get("folder_id")
     if folder_id is not None:
