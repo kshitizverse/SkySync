@@ -16,6 +16,7 @@ from flask import Flask, jsonify, redirect, render_template, request, send_file,
 from flask_cors import CORS
 from flask_session import Session
 from werkzeug.utils import secure_filename as werkzeug_secure_filename
+from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.exceptions import HTTPException
 
 load_dotenv()
@@ -34,11 +35,14 @@ from storage_db import (  # noqa: E402
     get_file_stats,
     get_folder,
     get_folder_breadcrumb,
+    get_share_by_id,
     get_share_by_token,
     get_user_by_id,
     get_user_by_telegram_id,
     get_user_file_record,
+    increment_share_download_count,
     init_db,
+    invalidate_one_time_share,
     list_trash_files,
     list_trash_folders,
     list_user_files,
@@ -58,6 +62,7 @@ from storage_db import (  # noqa: E402
     revoke_all_user_shares,
     revoke_all_webdav_tokens,
     revoke_share,
+    revoke_all_shares_for_file,
     row_to_dict,
     soft_delete_file,
     soft_delete_folder,
@@ -66,6 +71,7 @@ from storage_db import (  # noqa: E402
     update_user_name,
     update_user_session_path,
     update_user_telegram_info,
+    update_share_last_accessed,
 )
 from rate_limiter import RateLimitStore  # noqa: E402
 from telegram_handler import create_telegram_handler_for_user, run_telegram_op  # noqa: E402
@@ -346,6 +352,10 @@ LOGIN_RATE_WINDOW = timedelta(minutes=15)
 LOGIN_MAX_ATTEMPTS = 10
 TELEGRAM_CODE_RATE_WINDOW = timedelta(minutes=5)
 TELEGRAM_CODE_MAX_PER_WINDOW = 5
+SHARE_CREATE_RATE_WINDOW = timedelta(minutes=5)
+SHARE_CREATE_MAX_PER_WINDOW = 20
+SHARE_PASSWORD_RATE_WINDOW = timedelta(minutes=5)
+SHARE_PASSWORD_MAX_ATTEMPTS = 10
 
 
 def utcnow():
@@ -612,17 +622,45 @@ def logout():
 def share_view(token):
     share = get_share_by_token(token)
     if not share:
-        return render_template("share.html", error="Share link is invalid or has been revoked", file=None, can_download=False, preview_url="", download_url=""), 404
+        return render_template("share.html", error="Share link is invalid or has been revoked", file=None, can_download=False, preview_url="", download_url="", requires_password=False, share_token=token, share_info=None), 404
+
+    if share.get("revoked_at"):
+        return render_template("share.html", error="Share link has been revoked", file=None, can_download=False, preview_url="", download_url="", requires_password=False, share_token=token, share_info=None), 410
+
     if share["expires_at"]:
         try:
             exp = datetime.fromisoformat(share["expires_at"])
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
             if utcnow() > exp:
-                return render_template("share.html", error="Share link has expired", file=None, can_download=False, preview_url="", download_url=""), 410
+                return render_template("share.html", error="Share link has expired", file=None, can_download=False, preview_url="", download_url="", requires_password=False, share_token=token, share_info=None), 410
         except (ValueError, TypeError):
             pass
+
     record = get_file_record(share["file_id"])
     if not record:
-        return render_template("share.html", error="Shared file no longer exists", file=None, can_download=False, preview_url="", download_url=""), 404
+        return render_template("share.html", error="Shared file no longer exists", file=None, can_download=False, preview_url="", download_url="", requires_password=False, share_token=token, share_info=None), 404
+
+    if record.get("is_deleted"):
+        return render_template("share.html", error="Shared file has been deleted", file=None, can_download=False, preview_url="", download_url="", requires_password=False, share_token=token, share_info=None), 404
+
+    if record.get("is_vaulted"):
+        return render_template("share.html", error="This file is no longer available", file=None, can_download=False, preview_url="", download_url="", requires_password=False, share_token=token, share_info=None), 403
+
+    if share.get("one_time") and share.get("download_count", 0) > 0:
+        return render_template("share.html", error="This one-time link has already been used", file=None, can_download=False, preview_url="", download_url="", requires_password=False, share_token=token, share_info=None), 410
+
+    if share.get("password_hash"):
+        session_key = f"share_pwd_{share['id']}"
+        if not session.get(session_key):
+            return render_template("share.html", error=None, file=None, can_download=False, preview_url="", download_url="", requires_password=True, share_token=token, share_info={
+                "filename": record["filename"],
+                "has_password": True,
+            }), 200
+
+    can_download = bool(share["can_download"])
+    if share.get("download_limit") is not None and share.get("download_count", 0) >= share["download_limit"]:
+        can_download = False
 
     mime = (record.get("mime_type") or "").lower()
     file_type = file_type_from_mime(mime)
@@ -640,12 +678,38 @@ def share_view(token):
     download_url = url_for("shared_download", token=token)
     preview_url = url_for("shared_preview", token=token) if is_previewable else ""
 
+    expires_display = None
+    if share["expires_at"]:
+        try:
+            exp = datetime.fromisoformat(share["expires_at"])
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            delta = exp - utcnow()
+            if delta.days > 0:
+                expires_display = f"{delta.days} day{'s' if delta.days != 1 else ''}"
+            else:
+                hours = max(1, delta.seconds // 3600)
+                expires_display = f"{hours} hour{'s' if hours != 1 else ''}"
+        except (ValueError, TypeError):
+            pass
+
+    share_info = {
+        "download_count": share.get("download_count", 0),
+        "download_limit": share.get("download_limit"),
+        "expires_display": expires_display,
+        "has_password": bool(share.get("password_hash")),
+        "one_time": bool(share.get("one_time")),
+    }
+
     return render_template("share.html",
         file=file_data,
         error=None,
-        can_download=bool(share["can_download"]),
+        can_download=can_download,
         download_url=download_url,
         preview_url=preview_url,
+        requires_password=False,
+        share_token=token,
+        share_info=share_info,
     )
 
 
@@ -1364,6 +1428,11 @@ def create_file_share(file_id):
     if not user:
         return jsonify({"success": False, "error": "Unauthorized"}), 401
 
+    ip_key = f"share_create:{client_ip()}"
+    retry_after = rate_limit.status(ip_key, SHARE_CREATE_MAX_PER_WINDOW, SHARE_CREATE_RATE_WINDOW)
+    if retry_after:
+        return jsonify({"success": False, "error": "Too many share requests. Please wait.", "retry_after": retry_after}), 429
+
     record = get_user_file_record(file_id, user["id"])
     if not record or record.get("is_deleted"):
         return jsonify({"success": False, "error": "File not found"}), 404
@@ -1376,18 +1445,57 @@ def create_file_share(file_id):
     data = request.json or {}
     can_view = data.get("can_view", True)
     can_download = data.get("can_download", False)
-    expires_days = data.get("expires_days")
+    expires_at = data.get("expires_at")
+    password = data.get("password")
+    one_time = data.get("one_time", False)
+    download_limit = data.get("download_limit")
 
-    expires_at = None
-    if expires_days:
+    if expires_at:
         try:
-            days = int(expires_days)
-            if 1 <= days <= 365:
-                expires_at = (utcnow() + timedelta(days=days)).isoformat()
+            exp_dt = datetime.fromisoformat(expires_at)
+            if exp_dt.tzinfo is None:
+                exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+            if exp_dt <= utcnow():
+                return jsonify({"success": False, "error": "Expiration must be in the future"}), 400
+            expires_at = exp_dt.isoformat()
         except (ValueError, TypeError):
-            pass
+            return jsonify({"success": False, "error": "Invalid expiration timestamp"}), 400
 
-    share = create_share(file_id, user["id"], can_view=int(can_view), can_download=int(can_download), expires_at=expires_at)
+    password_hash = None
+    if password:
+        if not isinstance(password, str) or len(password) < 4:
+            return jsonify({"success": False, "error": "Password must be at least 4 characters"}), 400
+        if len(password) > 128:
+            return jsonify({"success": False, "error": "Password must be at most 128 characters"}), 400
+        password_hash = generate_password_hash(password, method="pbkdf2:sha256", salt_length=16)
+
+    if one_time:
+        one_time = 1
+    else:
+        one_time = 0
+
+    if download_limit is not None:
+        try:
+            download_limit = int(download_limit)
+            if download_limit < 1:
+                return jsonify({"success": False, "error": "Download limit must be a positive integer"}), 400
+            if download_limit > 10000:
+                return jsonify({"success": False, "error": "Download limit is too high"}), 400
+        except (ValueError, TypeError):
+            return jsonify({"success": False, "error": "Invalid download limit"}), 400
+    else:
+        download_limit = None
+
+    share = create_share(
+        file_id, user["id"],
+        can_view=int(can_view),
+        can_download=int(can_download),
+        expires_at=expires_at,
+        password_hash=password_hash,
+        one_time=one_time,
+        download_limit=download_limit,
+    )
+    rate_limit.remember(ip_key)
     log_activity(user["id"], "share", detail=f"Shared {record['filename']}", ip_address=client_ip())
 
     share_url = url_for("share_view", token=share["share_token"], _external=True)
@@ -1395,11 +1503,16 @@ def create_file_share(file_id):
         "success": True,
         "message": "Share link created",
         "share": {
+            "id": share["id"],
             "token": share["share_token"],
             "url": share_url,
             "can_view": bool(share["can_view"]),
             "can_download": bool(share["can_download"]),
             "expires_at": share["expires_at"],
+            "has_password": password_hash is not None,
+            "one_time": bool(share["one_time"]),
+            "download_limit": share["download_limit"],
+            "download_count": share["download_count"],
         },
     }), 201
 
@@ -1422,6 +1535,12 @@ def list_shares():
                 "can_download": bool(s["can_download"]),
                 "expires_at": s["expires_at"],
                 "created_at": s["created_at"],
+                "has_password": bool(s.get("password_hash")),
+                "one_time": bool(s.get("one_time", 0)),
+                "download_limit": s.get("download_limit"),
+                "download_count": s.get("download_count", 0),
+                "last_accessed_at": s.get("last_accessed_at"),
+                "revoked_at": s.get("revoked_at"),
                 "url": url_for("share_view", token=s["share_token"], _external=True),
             }
             for s in shares
@@ -1435,12 +1554,7 @@ def revoke_share_endpoint(share_id):
     if not user:
         return jsonify({"success": False, "error": "Unauthorized"}), 401
 
-    from src.storage_db import get_connection
-    with get_connection() as conn:
-        share = conn.execute(
-            "SELECT id FROM file_shares WHERE id = ? AND owner_user_id = ?",
-            (share_id, user["id"])
-        ).fetchone()
+    share = get_share_by_id(share_id, user["id"])
     if not share:
         return jsonify({"success": False, "error": "Share not found"}), 404
 
@@ -1449,14 +1563,51 @@ def revoke_share_endpoint(share_id):
     return jsonify({"success": True, "message": "Share link revoked"}), 200
 
 
+@app.route("/api/share/<token>/verify-password", methods=["POST"])
+def verify_share_password(token):
+    share = get_share_by_token(token)
+    if not share:
+        return jsonify({"success": False, "error": "Share link is invalid"}), 404
+
+    if not share.get("password_hash"):
+        return jsonify({"success": False, "error": "This share does not require a password"}), 400
+
+    ip_key = f"share_pwd:{client_ip()}:{share['id']}"
+    retry_after = rate_limit.status(ip_key, SHARE_PASSWORD_MAX_ATTEMPTS, SHARE_PASSWORD_RATE_WINDOW)
+    if retry_after:
+        return jsonify({"success": False, "error": "Too many password attempts. Please wait.", "retry_after": retry_after}), 429
+
+    data = request.json or {}
+    password = data.get("password", "")
+
+    if not password or not isinstance(password, str):
+        return jsonify({"success": False, "error": "Password is required"}), 400
+
+    if not check_password_hash(share["password_hash"], password):
+        rate_limit.remember(ip_key)
+        return jsonify({"success": False, "error": "Invalid password"}), 403
+
+    session_key = f"share_pwd_{share['id']}"
+    session[session_key] = True
+    rate_limit.remember(f"share_pwd_ok:{client_ip()}:{share['id']}")
+    return jsonify({"success": True, "message": "Password verified"}), 200
+
+
 @app.route("/api/share/<token>/download", methods=["GET"])
 def shared_download(token):
     share = get_share_by_token(token)
-    if not share or not share["can_download"]:
+    if not share:
         return jsonify({"success": False, "error": "Access denied"}), 403
+
+    if share.get("revoked_at"):
+        return jsonify({"success": False, "error": "Share link has been revoked"}), 403
+
     if share["expires_at"]:
         try:
-            if utcnow() > datetime.fromisoformat(share["expires_at"]):
+            exp = datetime.fromisoformat(share["expires_at"])
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if utcnow() > exp:
                 return jsonify({"success": False, "error": "Share link has expired"}), 410
         except (ValueError, TypeError):
             pass
@@ -1465,8 +1616,25 @@ def shared_download(token):
     if not record:
         return jsonify({"success": False, "error": "File not found"}), 404
 
+    if record.get("is_deleted"):
+        return jsonify({"success": False, "error": "File has been deleted"}), 404
+
     if record.get("is_vaulted"):
         return jsonify({"success": False, "error": "Access denied"}), 403
+
+    if not share["can_download"]:
+        return jsonify({"success": False, "error": "Download not allowed for this share"}), 403
+
+    if share.get("password_hash"):
+        session_key = f"share_pwd_{share['id']}"
+        if not session.get(session_key):
+            return jsonify({"success": False, "error": "Password required"}), 403
+
+    if share.get("download_limit") is not None and share.get("download_count", 0) >= share["download_limit"]:
+        return jsonify({"success": False, "error": "Download limit reached"}), 403
+
+    if share.get("one_time") and share.get("download_count", 0) > 0:
+        return jsonify({"success": False, "error": "This one-time link has already been used"}), 410
 
     owner = get_user_by_id(record["user_id"])
     cached = create_telegram_handler_for_user(owner) if owner else None
@@ -1477,11 +1645,15 @@ def shared_download(token):
     safe_name = sanitize_filename(record["filename"]) or f"file_{record['id']}"
     output_path = os.path.join("downloads", f"share_{safe_name}")
     try:
-        logger.info("Shared download: owner=%s msg_id=%s", record["user_id"], record["telegram_message_id"])
         success = run_telegram_op(cached, cached.handler.download_file(record["telegram_message_id"], output_path))
-        logger.info("Shared download result: success=%s exists=%s", success, os.path.exists(output_path))
         if not success or not os.path.exists(output_path):
             return jsonify({"success": False, "error": "Download failed"}), 500
+
+        increment_share_download_count(share["id"])
+
+        if share.get("one_time"):
+            invalidate_one_time_share(share["id"])
+
         return send_file(output_path, as_attachment=True, download_name=record["filename"])
     except Exception as exc:
         logger.error("Shared download error: %s", exc)
@@ -1497,11 +1669,18 @@ def shared_download(token):
 @app.route("/api/share/<token>/preview", methods=["GET"])
 def shared_preview(token):
     share = get_share_by_token(token)
-    if not share or not share["can_view"]:
+    if not share:
         return jsonify({"success": False, "error": "Access denied"}), 403
+
+    if share.get("revoked_at"):
+        return jsonify({"success": False, "error": "Share link has been revoked"}), 403
+
     if share["expires_at"]:
         try:
-            if utcnow() > datetime.fromisoformat(share["expires_at"]):
+            exp = datetime.fromisoformat(share["expires_at"])
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if utcnow() > exp:
                 return jsonify({"success": False, "error": "Share link has expired"}), 410
         except (ValueError, TypeError):
             pass
@@ -1510,8 +1689,22 @@ def shared_preview(token):
     if not record:
         return jsonify({"success": False, "error": "File not found"}), 404
 
+    if record.get("is_deleted"):
+        return jsonify({"success": False, "error": "File has been deleted"}), 404
+
     if record.get("is_vaulted"):
         return jsonify({"success": False, "error": "Access denied"}), 403
+
+    if not share["can_view"]:
+        return jsonify({"success": False, "error": "Preview not allowed for this share"}), 403
+
+    if share.get("password_hash"):
+        session_key = f"share_pwd_{share['id']}"
+        if not session.get(session_key):
+            return jsonify({"success": False, "error": "Password required"}), 403
+
+    if share.get("one_time") and share.get("download_count", 0) > 0:
+        return jsonify({"success": False, "error": "This one-time link has already been used"}), 410
 
     mime_type = (record.get("mime_type") or "").lower()
     if not (mime_type.startswith("image/") or mime_type.startswith("video/") or mime_type.startswith("audio/")):
@@ -1529,6 +1722,11 @@ def shared_preview(token):
         success = run_telegram_op(cached, cached.handler.download_file(record["telegram_message_id"], preview_path))
         if not success or not os.path.exists(preview_path):
             return jsonify({"success": False, "error": "Preview download failed"}), 500
+
+    update_share_last_accessed(share["id"])
+
+    if share.get("one_time"):
+        invalidate_one_time_share(share["id"])
 
     return send_file(preview_path, mimetype=record.get("mime_type") or None, as_attachment=False)
 

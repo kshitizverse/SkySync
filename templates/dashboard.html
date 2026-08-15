@@ -34,6 +34,9 @@
         <button class="nav-item" data-view="trash" type="button">
           <span class="nav-icon">&#128465;</span> Trash <span class="nav-count" id="nav-count-trash">0</span>
         </button>
+        <button class="nav-item" data-view="shares" type="button">
+          <span class="nav-icon">&#128279;</span> Shares <span class="nav-count" id="nav-count-shares">0</span>
+        </button>
         <div class="nav-divider"></div>
         <button class="nav-item vault-nav-item" data-view="vault" type="button" id="vault-nav-btn">
           <span class="nav-icon" id="vault-nav-icon">&#128274;</span>
@@ -227,32 +230,68 @@
   <div class="modal-backdrop" id="share-modal" hidden role="dialog" aria-modal="true" aria-label="Share file">
     <div class="modal-card compact-card">
       <div class="modal-heading">
-        <h3>Share file</h3>
-        <p>Create a secure link to share this file.</p>
+        <h3>&#128279; Share File</h3>
+        <p id="share-modal-filename" class="share-modal-filename"></p>
       </div>
       <form id="share-form">
+        <div class="share-section">
+          <div class="share-section-label">Expiration</div>
+          <div class="share-radio-group">
+            <label class="share-radio"><input type="radio" name="share-expiry" value="" checked> Never</label>
+            <label class="share-radio"><input type="radio" name="share-expiry" value="1h"> 1 hour</label>
+            <label class="share-radio"><input type="radio" name="share-expiry" value="1d"> 1 day</label>
+            <label class="share-radio"><input type="radio" name="share-expiry" value="7d"> 7 days</label>
+            <label class="share-radio"><input type="radio" name="share-expiry" value="custom"> Custom</label>
+          </div>
+        </div>
+        <div class="form-group" id="share-custom-expiry-group" hidden>
+          <label>Custom Expiration</label>
+          <input type="datetime-local" id="share-custom-expiry" aria-label="Custom expiration date">
+        </div>
+        <div class="share-divider"></div>
+        <div class="share-section">
+          <div class="share-section-label">Security</div>
+          <div class="share-check-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="share-can-download" checked> Allow download
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" id="share-require-password"> Require password
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" id="share-one-time"> One-time link
+            </label>
+          </div>
+        </div>
+        <div class="form-group" id="share-password-group" hidden>
+          <label>Password</label>
+          <input type="password" id="share-password" placeholder="Enter password" maxlength="128" autocomplete="off" aria-label="Share password">
+        </div>
+        <div class="share-divider"></div>
         <div class="form-group">
-          <label>Expires after</label>
-          <select id="share-expiry" aria-label="Share expiry">
-            <option value="">Never</option>
-            <option value="1">1 day</option>
-            <option value="7">7 days</option>
-            <option value="30">30 days</option>
-            <option value="90">90 days</option>
+          <label>Download limit</label>
+          <select id="share-download-limit" aria-label="Download limit">
+            <option value="">No limit</option>
+            <option value="1">1 download</option>
+            <option value="3">3 downloads</option>
+            <option value="5">5 downloads</option>
+            <option value="10">10 downloads</option>
+            <option value="25">25 downloads</option>
+            <option value="50">50 downloads</option>
+            <option value="100">100 downloads</option>
           </select>
         </div>
-        <div class="form-group">
-          <label class="checkbox-label">
-            <input type="checkbox" id="share-can-download"> Allow download
-          </label>
-        </div>
         <div class="share-result" id="share-result" hidden>
-          <input type="text" id="share-url-input" readonly aria-label="Share URL">
-          <button type="button" class="primary-btn" id="copy-share-btn">Copy</button>
+          <div class="share-result-header">Share link created</div>
+          <div class="share-result-url">
+            <input type="text" id="share-url-input" readonly aria-label="Share URL">
+            <button type="button" class="primary-btn" id="copy-share-btn">Copy</button>
+          </div>
+          <div class="share-result-meta" id="share-result-meta"></div>
         </div>
         <div class="modal-actions">
-          <button class="soft-btn" data-close-modal="share-modal" type="button">Close</button>
-          <button class="primary-btn" type="submit" id="create-share-btn">Create link</button>
+          <button class="soft-btn" data-close-modal="share-modal" type="button">Cancel</button>
+          <button class="primary-btn" type="submit" id="create-share-btn">Create Secure Link</button>
         </div>
       </form>
     </div>
@@ -382,6 +421,29 @@
   <div class="download-indicator" id="download-indicator" hidden role="status" aria-label="Download progress">
     <div class="spinner"></div>
     <div class="download-indicator-text" id="download-indicator-text">Preparing file...</div>
+  </div>
+
+  <!-- Active Shares View -->
+  <div class="shares-view" id="shares-view" hidden>
+    <section class="shares-toolbar panel">
+      <div class="vault-toolbar-left">
+        <div class="vault-header-info">
+          <h2 class="vault-header-title">&#128279; Active Shares</h2>
+          <span class="vault-header-subtitle" id="shares-header-subtitle">Loading...</span>
+        </div>
+      </div>
+      <div class="vault-toolbar-actions">
+        <button class="soft-btn" id="shares-refresh-btn" type="button">Refresh</button>
+      </div>
+    </section>
+    <section class="content-panel panel">
+      <div class="empty-state" id="shares-empty-state" hidden>
+        <div class="empty-icon">&#128279;</div>
+        <h3>No active shares</h3>
+        <p>Share files from the All Files view to see them here.</p>
+      </div>
+      <div id="shares-list" class="shares-list"></div>
+    </section>
   </div>
 
   <div class="toast-stack" id="toast-stack" role="status" aria-live="polite"></div>

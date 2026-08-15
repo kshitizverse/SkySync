@@ -164,11 +164,32 @@ def init_db():
                 expires_at TEXT,
                 is_active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
-                FOREIGN KEY(file_id) REFERENCES file_records(id),
-                FOREIGN KEY(owner_user_id) REFERENCES users(id)
+                password_hash TEXT,
+                one_time INTEGER NOT NULL DEFAULT 0,
+                download_limit INTEGER,
+                download_count INTEGER NOT NULL DEFAULT 0,
+                last_accessed_at TEXT,
+                revoked_at TEXT,
+                UNIQUE(share_token)
             )
             """
         )
+        share_cols = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(file_shares)").fetchall()
+        }
+        if "password_hash" not in share_cols:
+            conn.execute("ALTER TABLE file_shares ADD COLUMN password_hash TEXT")
+        if "one_time" not in share_cols:
+            conn.execute("ALTER TABLE file_shares ADD COLUMN one_time INTEGER NOT NULL DEFAULT 0")
+        if "download_limit" not in share_cols:
+            conn.execute("ALTER TABLE file_shares ADD COLUMN download_limit INTEGER")
+        if "download_count" not in share_cols:
+            conn.execute("ALTER TABLE file_shares ADD COLUMN download_count INTEGER NOT NULL DEFAULT 0")
+        if "last_accessed_at" not in share_cols:
+            conn.execute("ALTER TABLE file_shares ADD COLUMN last_accessed_at TEXT")
+        if "revoked_at" not in share_cols:
+            conn.execute("ALTER TABLE file_shares ADD COLUMN revoked_at TEXT")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS activity_log (
@@ -612,13 +633,18 @@ def get_user_file_by_message_id(user_id, telegram_message_id):
         ).fetchone())
 
 
-def create_share(file_id, owner_user_id, can_view=1, can_download=0, expires_at=None):
+def create_share(file_id, owner_user_id, can_view=1, can_download=0, expires_at=None,
+                 password_hash=None, one_time=0, download_limit=None):
     token = secrets.token_urlsafe(32)
     now = utcnow_iso()
     with get_connection() as conn:
         cursor = conn.execute(
-            "INSERT INTO file_shares (file_id, owner_user_id, share_token, can_view, can_download, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (file_id, owner_user_id, token, int(can_view), int(can_download), expires_at, now),
+            """INSERT INTO file_shares
+               (file_id, owner_user_id, share_token, can_view, can_download, expires_at,
+                created_at, password_hash, one_time, download_limit)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (file_id, owner_user_id, token, int(can_view), int(can_download), expires_at,
+             now, password_hash, int(one_time), download_limit),
         )
         return row_to_dict(conn.execute(
             "SELECT * FROM file_shares WHERE id = ?", (cursor.lastrowid,),
@@ -634,10 +660,11 @@ def get_share_by_token(token):
 
 
 def revoke_share(share_id, owner_user_id):
+    now = utcnow_iso()
     with get_connection() as conn:
         conn.execute(
-            "UPDATE file_shares SET is_active = 0 WHERE id = ? AND owner_user_id = ?",
-            (share_id, owner_user_id),
+            "UPDATE file_shares SET is_active = 0, revoked_at = ? WHERE id = ? AND owner_user_id = ?",
+            (now, share_id, owner_user_id),
         )
 
 
@@ -708,6 +735,58 @@ def count_user_active_shares(user_id):
             (user_id,),
         ).fetchone()
         return row["cnt"]
+
+
+def get_share_by_id(share_id, owner_user_id):
+    with get_connection() as conn:
+        return row_to_dict(conn.execute(
+            "SELECT * FROM file_shares WHERE id = ? AND owner_user_id = ?",
+            (share_id, owner_user_id),
+        ).fetchone())
+
+
+def increment_share_download_count(share_id):
+    now = utcnow_iso()
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE file_shares SET download_count = download_count + 1, last_accessed_at = ? WHERE id = ?",
+            (now, share_id),
+        )
+
+
+def update_share_last_accessed(share_id):
+    now = utcnow_iso()
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE file_shares SET last_accessed_at = ? WHERE id = ?",
+            (now, share_id),
+        )
+
+
+def invalidate_one_time_share(share_id):
+    now = utcnow_iso()
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE file_shares SET is_active = 0, revoked_at = ? WHERE id = ?",
+            (now, share_id),
+        )
+
+
+def get_active_share_by_token(token):
+    with get_connection() as conn:
+        return row_to_dict(conn.execute(
+            "SELECT * FROM file_shares WHERE share_token = ? AND is_active = 1",
+            (token,),
+        ).fetchone())
+
+
+def revoke_all_shares_for_file(file_id, owner_user_id):
+    now = utcnow_iso()
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE file_shares SET is_active = 0, revoked_at = ? WHERE file_id = ? AND owner_user_id = ? AND is_active = 1",
+            (now, file_id, owner_user_id),
+        )
 
 
 # ---------------------------------------------------------------------------

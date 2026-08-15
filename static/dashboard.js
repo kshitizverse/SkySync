@@ -23,7 +23,8 @@ const state = {
   uploadQueue: [],
   contextTarget: null,
   currentPage: 1,
-  pagination: null
+  pagination: null,
+  shares: [],
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -121,6 +122,15 @@ function setupEventListeners() {
         closeSidebar();
         return;
       }
+      if (view === 'shares') {
+        state.currentView = 'shares';
+        document.querySelectorAll('.sidebar-nav .nav-item').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById('shares-view').hidden = false;
+        loadShares();
+        closeSidebar();
+        return;
+      }
       state.currentView = view;
       document.querySelectorAll('.sidebar-nav .nav-item').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
@@ -155,6 +165,20 @@ function setupEventListeners() {
   document.getElementById('edit-profile-btn').addEventListener('click', openEditName);
   document.getElementById('share-form').addEventListener('submit', submitShare);
   document.getElementById('copy-share-btn').addEventListener('click', copyShareUrl);
+  document.getElementById('share-require-password').addEventListener('change', function() {
+    document.getElementById('share-password-group').hidden = !this.checked;
+    if (this.checked) {
+      document.getElementById('share-password').focus();
+    }
+  });
+  document.querySelectorAll('input[name="share-expiry"]').forEach(function(radio) {
+    radio.addEventListener('change', function() {
+      document.getElementById('share-custom-expiry-group').hidden = this.value !== 'custom';
+      if (this.value === 'custom') {
+        document.getElementById('share-custom-expiry').focus();
+      }
+    });
+  });
   document.getElementById('mobile-menu-btn').addEventListener('click', toggleSidebar);
   document.getElementById('sidebar-close-btn').addEventListener('click', closeSidebar);
   document.getElementById('upload-panel-close').addEventListener('click', () => {
@@ -764,6 +788,13 @@ function handleFileAction(action, file) {
       state.shareTarget = file;
       document.getElementById('share-result').hidden = true;
       document.getElementById('share-url-input').value = '';
+      document.getElementById('share-result-meta').innerHTML = '';
+      document.getElementById('share-modal-filename').textContent = escapeHtml(file.name);
+      document.getElementById('create-share-btn').hidden = false;
+      var shareForm = document.getElementById('share-form');
+      shareForm.reset();
+      document.getElementById('share-password-group').hidden = true;
+      document.getElementById('share-custom-expiry-group').hidden = true;
       openModal('share-modal');
       break;
     case 'restore': restoreSingleFile(file); break;
@@ -860,25 +891,84 @@ async function toggleFavorite(file) {
 async function submitShare(event) {
   event.preventDefault();
   if (!state.shareTarget) return;
-  const expiry = document.getElementById('share-expiry').value;
+  var expiryRadio = document.querySelector('input[name="share-expiry"]:checked');
+  const expiry = expiryRadio ? expiryRadio.value : '';
   const canDownload = document.getElementById('share-can-download').checked;
+  const requirePassword = document.getElementById('share-require-password').checked;
+  const password = document.getElementById('share-password').value;
+  const oneTime = document.getElementById('share-one-time').checked;
+  const downloadLimit = document.getElementById('share-download-limit').value;
+
+  let expiresAt = null;
+  if (expiry === '1h') {
+    expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  } else if (expiry === '1d') {
+    expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  } else if (expiry === '7d') {
+    expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  } else if (expiry === 'custom') {
+    const customExpiry = document.getElementById('share-custom-expiry').value;
+    if (customExpiry) {
+      const dt = new Date(customExpiry);
+      if (dt > new Date()) {
+        expiresAt = dt.toISOString();
+      }
+    }
+  }
+
+  const body = {
+    can_view: true,
+    can_download: canDownload,
+    expires_at: expiresAt,
+    one_time: oneTime,
+  };
+
+  if (requirePassword && password) {
+    body.password = password;
+  }
+
+  if (downloadLimit) {
+    body.download_limit = parseInt(downloadLimit);
+  }
+
+  var createBtn = document.getElementById('create-share-btn');
+  createBtn.disabled = true;
+  createBtn.textContent = 'Creating...';
 
   try {
     const data = await fetchJSON(`${routes.fileBase}${state.shareTarget.id}/share`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        can_view: true,
-        can_download: canDownload,
-        expires_days: expiry ? parseInt(expiry) : null
-      })
+      body: JSON.stringify(body)
     });
     document.getElementById('share-url-input').value = data.share.url;
     document.getElementById('share-result').hidden = false;
-    document.getElementById('create-share-btn').hidden = true;
+    createBtn.hidden = true;
+
+    var metaHtml = '';
+    if (data.share.expires_at) {
+      var expDate = new Date(data.share.expires_at);
+      var now = new Date();
+      var diff = expDate - now;
+      if (diff > 0) {
+        var days = Math.floor(diff / (1000 * 60 * 60 * 24));
+        var hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+        if (days > 0) metaHtml += '<span class="chip neutral">&#9200; Expires in ' + days + ' day' + (days === 1 ? '' : 's') + '</span>';
+        else metaHtml += '<span class="chip neutral">&#9200; Expires in ' + hours + ' hour' + (hours === 1 ? '' : 's') + '</span>';
+      }
+    }
+    if (data.share.one_time) metaHtml += '<span class="chip neutral">&#9889; One-time</span>';
+    if (data.share.has_password) metaHtml += '<span class="chip neutral">&#128274; Password</span>';
+    if (!data.share.can_download) metaHtml += '<span class="chip neutral">&#128269; Preview only</span>';
+    if (data.share.download_limit) metaHtml += '<span class="chip neutral">&#11015; Max ' + data.share.download_limit + '</span>';
+
+    document.getElementById('share-result-meta').innerHTML = metaHtml;
     showToast('Share link created', 'success');
   } catch (error) {
     showToast(error.message || 'Failed to create share link', 'error');
+  } finally {
+    createBtn.disabled = false;
+    createBtn.textContent = 'Create Secure Link';
   }
 }
 
@@ -887,6 +977,127 @@ function copyShareUrl() {
   navigator.clipboard.writeText(input.value)
     .then(() => showToast('Link copied to clipboard', 'success'))
     .catch(() => { input.select(); document.execCommand('copy'); showToast('Link copied', 'success'); });
+}
+
+async function loadShares() {
+  try {
+    const data = await fetchJSON('/api/shares');
+    state.shares = data.shares || [];
+    renderShares();
+  } catch (error) {
+    showToast(error.message || 'Failed to load shares', 'error');
+  }
+}
+
+function renderShares() {
+  const container = document.getElementById('shares-list');
+  const emptyState = document.getElementById('shares-empty-state');
+  const subtitle = document.getElementById('shares-header-subtitle');
+
+  if (!container) return;
+
+  const shares = state.shares || [];
+  subtitle.textContent = shares.length ? shares.length + ' active share' + (shares.length === 1 ? '' : 's') : 'No active shares';
+
+  if (!shares.length) {
+    container.innerHTML = '';
+    emptyState.hidden = false;
+    return;
+  }
+
+  emptyState.hidden = true;
+  container.innerHTML = '';
+
+  shares.forEach(function(share) {
+    var item = document.createElement('div');
+    item.className = 'share-item';
+    item.dataset.shareId = share.id;
+
+    var metaHtml = '';
+    metaHtml += '<span>&#128279; ' + share.download_count + ' download' + (share.download_count === 1 ? '' : 's') + '</span>';
+
+    if (share.download_limit) {
+      metaHtml += '<span>/ ' + share.download_limit + ' limit</span>';
+    } else {
+      metaHtml += '<span>No limit</span>';
+    }
+    if (share.expires_at) {
+      var expDate = new Date(share.expires_at);
+      var now = new Date();
+      if (expDate > now) {
+        var diff = expDate - now;
+        var days = Math.floor(diff / (1000 * 60 * 60 * 24));
+        var hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+        var mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+        if (days > 0) {
+          metaHtml += '<span>&#9200; Expires in ' + days + ' day' + (days === 1 ? '' : 's') + '</span>';
+        } else if (hours > 0) {
+          metaHtml += '<span>&#9200; Expires in ' + hours + ' hour' + (hours === 1 ? '' : 's') + '</span>';
+        } else {
+          metaHtml += '<span>&#9200; Expires in ' + mins + ' min' + (mins === 1 ? '' : 's') + '</span>';
+        }
+      } else {
+        metaHtml += '<span style="color:var(--danger)">&#9200; Expired</span>';
+      }
+    }
+    if (share.one_time) {
+      metaHtml += '<span>&#9889; One-time link</span>';
+    }
+
+    var chipsHtml = '';
+    if (share.has_password) {
+      chipsHtml += '<span class="chip neutral">&#128274; Password</span>';
+    }
+    if (share.can_download) {
+      chipsHtml += '<span class="chip success">&#11015; Download enabled</span>';
+    } else {
+      chipsHtml += '<span class="chip neutral">&#128269; Preview only</span>';
+    }
+
+    item.innerHTML = '<div class="share-item-info">' +
+      '<div class="share-item-name">' + escapeHtml(share.filename) + '</div>' +
+      '<div class="share-item-meta">' + metaHtml + '</div>' +
+      '<div class="share-item-chips">' + chipsHtml + '</div>' +
+      '</div>' +
+      '<div class="share-item-actions">' +
+      '<button class="soft-btn small" type="button" data-action="copy">&#128203; Copy</button>' +
+      '<button class="soft-btn small danger-btn" type="button" data-action="revoke">&#128683; Revoke</button>' +
+      '</div>';
+
+    item.querySelector('[data-action="copy"]').addEventListener('click', function() {
+      navigator.clipboard.writeText(share.url)
+        .then(function() { showToast('Link copied to clipboard', 'success'); })
+        .catch(function() { showToast('Failed to copy', 'error'); });
+    });
+
+    item.querySelector('[data-action="revoke"]').addEventListener('click', function() {
+      revokeShare(share.id, share.filename);
+    });
+
+    container.appendChild(item);
+  });
+
+  document.getElementById('nav-count-shares').textContent = shares.length;
+}
+
+async function revokeShare(shareId, filename) {
+  var ok = await showConfirm('Revoke share?', 'The share link for "' + filename + '" will be immediately disabled. This cannot be undone.', 'Revoke', true);
+  if (!ok) return;
+
+  try {
+    await fetchJSON('/api/shares/' + shareId + '/revoke', { method: 'DELETE' });
+    state.shares = state.shares.filter(function(s) { return s.id !== shareId; });
+    renderShares();
+    showToast('Share link revoked', 'success');
+  } catch (error) {
+    showToast(error.message || 'Failed to revoke share', 'error');
+  }
+}
+
+function showMainViews() {
+  document.getElementById('shares-view').hidden = true;
+  document.getElementById('vault-view').hidden = true;
+  document.getElementById('vault-lock-screen').hidden = true;
 }
 
 async function restoreSingleFile(file) {
@@ -1610,6 +1821,13 @@ function setupVaultEventListeners() {
       navigateToFiles();
     });
   }
+
+  var sharesRefreshBtn = document.getElementById('shares-refresh-btn');
+  if (sharesRefreshBtn) {
+    sharesRefreshBtn.addEventListener('click', function() {
+      loadShares();
+    });
+  }
 }
 
 document.addEventListener('DOMContentLoaded', setupVaultEventListeners);
@@ -1678,18 +1896,7 @@ function hideAllViews() {
     var header = mainPanel.querySelector('.dashboard-header');
     if (header) header.hidden = true;
   }
-}
-
-function showMainViews() {
-  var mainPanel = document.querySelector('.main-panel');
-  if (mainPanel) {
-    var sections = mainPanel.querySelectorAll('.stats-row, .toolbar.panel, .content-panel, .status-strip');
-    sections.forEach(function(s) { s.hidden = false; });
-    var header = mainPanel.querySelector('.dashboard-header');
-    if (header) header.hidden = false;
-  }
-  document.getElementById('vault-view').hidden = true;
-  document.getElementById('vault-lock-screen').hidden = true;
+  document.getElementById('shares-view').hidden = true;
 }
 
 function showVaultLockScreen() {

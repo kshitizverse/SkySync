@@ -8,48 +8,196 @@
   <style>
     body { background: #07141f; color: #f4f8fb; font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif; min-height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0; padding: 24px; }
     .share-card { background: rgba(11,27,39,0.92); border: 1px solid rgba(152,203,255,0.12); border-radius: 20px; padding: 40px; max-width: 480px; width: 100%; text-align: center; }
-    .share-card .brand { font-size: 24px; font-weight: 700; margin-bottom: 8px; }
-    .share-card .brand i { color: #34d399; margin-right: 8px; }
-    .share-card .subtitle { color: rgba(244,248,251,0.6); margin-bottom: 32px; }
-    .file-info { background: rgba(255,255,255,0.04); border-radius: 12px; padding: 20px; margin-bottom: 24px; text-align: left; }
-    .file-info .file-name { font-size: 18px; font-weight: 600; word-break: break-all; margin-bottom: 8px; }
-    .file-info .file-meta { color: rgba(244,248,251,0.5); font-size: 14px; }
-    .share-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
-    .share-actions a, .share-actions button { padding: 10px 20px; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; text-decoration: none; border: none; transition: all 0.2s; }
+    .share-card .brand { font-size: 24px; font-weight: 700; margin-bottom: 4px; }
+    .share-card .brand-accent { color: #34d399; }
+    .share-card .subtitle { color: rgba(244,248,251,0.6); margin-bottom: 28px; font-size: 14px; }
+    .error-icon { font-size: 48px; margin-bottom: 16px; line-height: 1; }
+    .error-msg { color: #f87171; font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+    .error-detail { color: rgba(244,248,251,0.5); font-size: 13px; margin-bottom: 24px; }
+    .file-info { background: rgba(255,255,255,0.04); border-radius: 12px; padding: 20px; margin-bottom: 20px; text-align: left; }
+    .file-info .file-name { font-size: 18px; font-weight: 600; word-break: break-all; margin-bottom: 6px; }
+    .file-info .file-meta { color: rgba(244,248,251,0.5); font-size: 13px; }
+    .share-meta { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; font-size: 13px; color: rgba(244,248,251,0.6); }
+    .share-meta-item { display: flex; align-items: center; gap: 8px; }
+    .share-meta-item .icon { width: 18px; text-align: center; font-size: 14px; }
+    .share-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 8px; }
+    .share-actions a, .share-actions button { padding: 12px 24px; border-radius: 12px; font-size: 14px; font-weight: 600; cursor: pointer; text-decoration: none; border: none; transition: all 0.2s; }
     .download-btn { background: #34d399; color: #06111a; }
-    .download-btn:hover { background: #2cc08a; }
+    .download-btn:hover { background: #2cc08a; transform: translateY(-1px); }
+    .download-btn:disabled { background: rgba(52,211,153,0.3); color: rgba(6,17,26,0.5); cursor: not-allowed; transform: none; }
     .preview-btn { background: rgba(255,255,255,0.08); color: #f4f8fb; border: 1px solid rgba(152,203,255,0.15) !important; }
-    .preview-btn:hover { background: rgba(255,255,255,0.12); }
-    .expired-msg { color: #f87171; font-size: 14px; margin-top: 16px; }
-    .no-download { color: rgba(244,248,251,0.4); font-size: 13px; margin-top: 8px; }
+    .preview-btn:hover { background: rgba(255,255,255,0.12); transform: translateY(-1px); }
+    .no-download { color: rgba(244,248,251,0.4); font-size: 13px; margin-top: 12px; }
+    .password-form { width: 100%; text-align: left; }
+    .password-form label { display: block; font-size: 12px; font-weight: 600; color: rgba(244,248,251,0.5); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
+    .password-form input { width: 100%; padding: 12px 16px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; color: #f4f8fb; font-size: 14px; outline: none; margin-bottom: 12px; }
+    .password-form input:focus { border-color: rgba(52,211,153,0.4); }
+    .password-form .unlock-btn { width: 100%; padding: 12px; background: linear-gradient(135deg, #34d399, #0f766e); border: none; border-radius: 10px; color: #04131a; font-weight: 700; font-size: 14px; cursor: pointer; transition: all 0.2s; }
+    .password-form .unlock-btn:hover { filter: brightness(1.1); transform: translateY(-1px); }
+    .password-form .unlock-btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+    .password-error { color: #f87171; font-size: 13px; margin-bottom: 12px; min-height: 18px; }
+    .locked-icon { font-size: 48px; margin-bottom: 16px; line-height: 1; }
+    .limit-reached-icon { font-size: 48px; margin-bottom: 16px; line-height: 1; }
+    .share-card .powered { margin-top: 24px; font-size: 12px; color: rgba(244,248,251,0.3); }
+    .share-card .powered a { color: rgba(52,211,153,0.5); text-decoration: none; }
   </style>
 </head>
 <body>
   <div class="share-card">
-    <div class="brand"><i class="fas fa-cloud"></i> SkySync</div>
-    <div class="subtitle">Shared file</div>
+    <div class="brand"><span class="share-card-icon">&#9729;</span> <span class="brand-accent">Sky</span>Sync</div>
 
     {% if error %}
-      <div class="expired-msg">{{ error }}</div>
+      {% if 'expired' in error|lower %}
+        <div class="error-icon">&#9200;</div>
+      {% elif 'revoked' in error|lower or 'no longer' in error|lower %}
+        <div class="error-icon">&#128274;</div>
+      {% elif 'used' in error|lower %}
+        <div class="error-icon">&#9889;</div>
+      {% else %}
+        <div class="error-icon">&#128683;</div>
+      {% endif %}
+      <div class="error-msg">{{ error }}</div>
+      <div class="error-detail">This link cannot be used to access the file.</div>
+
+    {% elif requires_password %}
+      <div class="subtitle">Shared securely with you</div>
+      <div class="locked-icon">&#128274;</div>
+      <div class="file-info">
+        <div class="file-name">{{ share_info.filename }}</div>
+        <div class="file-meta">&#128274; Password protected</div>
+      </div>
+      <div class="password-form" id="password-form">
+        <label for="share-password">Password</label>
+        <input type="password" id="share-password" placeholder="Enter password" autocomplete="off" aria-label="Share password">
+        <div class="password-error" id="password-error" role="alert" hidden></div>
+        <button type="button" class="unlock-btn" id="unlock-btn">Unlock</button>
+      </div>
+
     {% elif file %}
+      <div class="subtitle">Shared securely with you</div>
       <div class="file-info">
         <div class="file-name">{{ file.name }}</div>
-        <div class="file-meta">{{ file.type }} &middot; {{ file.size }}</div>
+        <div class="file-meta">{{ file.type|capitalize }} &middot; {{ file.size }}</div>
       </div>
+
+      {% if share_info %}
+      <div class="share-meta">
+        {% if share_info.expires_display %}
+        <div class="share-meta-item">
+          <span class="icon">&#9200;</span>
+          <span>Expires in {{ share_info.expires_display }}</span>
+        </div>
+        {% endif %}
+        {% if share_info.download_limit %}
+        <div class="share-meta-item">
+          <span class="icon">&#11015;</span>
+          <span>Downloads: {{ share_info.download_count }} / {{ share_info.download_limit }}</span>
+        </div>
+        {% elif share_info.download_count > 0 %}
+        <div class="share-meta-item">
+          <span class="icon">&#11015;</span>
+          <span>{{ share_info.download_count }} download{{ 's' if share_info.download_count != 1 else '' }}</span>
+        </div>
+        {% endif %}
+        {% if share_info.one_time %}
+        <div class="share-meta-item">
+          <span class="icon">&#9889;</span>
+          <span>One-time link</span>
+        </div>
+        {% endif %}
+        {% if share_info.has_password %}
+        <div class="share-meta-item">
+          <span class="icon">&#128274;</span>
+          <span>Password protected</span>
+        </div>
+        {% endif %}
+      </div>
+      {% endif %}
 
       <div class="share-actions">
         {% if can_download %}
-          <a href="{{ download_url }}" class="download-btn" download>Download</a>
+          <a href="{{ download_url }}" class="download-btn" download>&#11015; Download</a>
         {% endif %}
         {% if file.is_previewable %}
-          <a href="{{ preview_url }}" class="preview-btn" target="_blank">Preview</a>
+          <a href="{{ preview_url }}" class="preview-btn" target="_blank">&#128269; Preview</a>
         {% endif %}
       </div>
 
       {% if not can_download %}
-        <div class="no-download">Download is not enabled for this share.</div>
+        {% if share_info and share_info.download_limit and share_info.download_count >= share_info.download_limit %}
+          <div class="limit-reached-icon">&#128683;</div>
+          <div class="no-download">Download limit has been reached.</div>
+        {% elif share_info and share_info.one_time and share_info.download_count > 0 %}
+          <div class="limit-reached-icon">&#9889;</div>
+          <div class="no-download">This one-time link has already been used.</div>
+        {% else %}
+          <div class="no-download">Download is not available for this share.</div>
+        {% endif %}
       {% endif %}
     {% endif %}
+
+    <div class="powered">Powered by <a href="/">SkySync</a></div>
   </div>
+
+  {% if requires_password %}
+  <script>
+    (function() {
+      var btn = document.getElementById('unlock-btn');
+      var input = document.getElementById('share-password');
+      var errorEl = document.getElementById('password-error');
+      var token = {{ share_token|tojson }};
+
+      function showError(msg) {
+        errorEl.textContent = msg;
+        errorEl.hidden = false;
+      }
+
+      function hideError() {
+        errorEl.hidden = true;
+      }
+
+      btn.addEventListener('click', function() {
+        hideError();
+        var password = input.value;
+        if (!password) {
+          showError('Enter your password');
+          return;
+        }
+        btn.disabled = true;
+        btn.textContent = 'Verifying...';
+
+        fetch('/api/share/' + token + '/verify-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: password })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (data.success) {
+            window.location.reload();
+          } else {
+            showError(data.error || 'Invalid password');
+            btn.disabled = false;
+            btn.textContent = 'Unlock';
+          }
+        })
+        .catch(function() {
+          showError('Network error. Please try again.');
+          btn.disabled = false;
+          btn.textContent = 'Unlock';
+        });
+      });
+
+      input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          btn.click();
+        }
+      });
+
+      input.focus();
+    })();
+  </script>
+  {% endif %}
 </body>
 </html>
