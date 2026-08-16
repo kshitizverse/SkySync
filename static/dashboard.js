@@ -63,7 +63,7 @@ function setupNavigationGuards() {
         loadViewData('files');
       } else if (viewParam === 'settings') {
         document.getElementById('settings-view').hidden = false;
-        loadSettingsView();
+        loadSettingsViewContent();
       } else if (viewParam === 'shares') {
         document.getElementById('shares-view').hidden = false;
         loadShares();
@@ -87,7 +87,7 @@ function setupNavigationGuards() {
     }
     // Handle popstate for settings view (fallback for state changes)
     if (state.currentView === 'settings') {
-      loadSettingsView();
+      loadSettingsViewContent();
     }
   });
   history.replaceState(null, '', location.pathname);
