@@ -40,6 +40,9 @@
         <button class="nav-item" data-view="activity" type="button">
           <span class="nav-icon">&#128339;</span> Activity
         </button>
+        <button class="nav-item" data-view="storage-intel" type="button">
+          <span class="nav-icon">&#128202;</span> Storage
+        </button>
         <div class="nav-divider"></div>
         <button class="nav-item vault-nav-item" data-view="vault" type="button" id="vault-nav-btn">
           <span class="nav-icon" id="vault-nav-icon">&#128274;</span>
@@ -494,6 +497,103 @@
         <button class="soft-btn" id="activity-load-more-btn" type="button">Load more</button>
       </div>
     </section>
+  </div>
+
+  <!-- Storage Intelligence View -->
+  <div class="storage-intel-view" id="storage-intel-view" hidden>
+    <section class="si-toolbar panel">
+      <div class="si-toolbar-left">
+        <div class="vault-header-info">
+          <h2 class="vault-header-title">&#128202; Storage Intelligence</h2>
+          <span class="vault-header-subtitle">Overview of your SkySync storage</span>
+        </div>
+      </div>
+      <div class="vault-toolbar-actions">
+        <button class="soft-btn" id="si-refresh-btn" type="button">Refresh</button>
+      </div>
+    </section>
+
+    <!-- Loading Skeleton -->
+    <div class="si-loading" id="si-loading" role="status" aria-live="polite">
+      <div class="si-skeleton-hero skeleton"></div>
+      <div class="si-skeleton-grid">
+        <div class="si-skeleton-card skeleton"></div>
+        <div class="si-skeleton-card skeleton"></div>
+        <div class="si-skeleton-card skeleton"></div>
+        <div class="si-skeleton-card skeleton"></div>
+        <div class="si-skeleton-card skeleton"></div>
+        <div class="si-skeleton-card skeleton"></div>
+      </div>
+      <div class="si-skeleton-row">
+        <div class="si-skeleton-list skeleton"></div>
+        <div class="si-skeleton-list skeleton"></div>
+      </div>
+    </div>
+
+    <!-- Error State -->
+    <div class="si-error" id="si-error" hidden role="alert">
+      <div class="empty-icon">&#9888;</div>
+      <h3>Unable to load storage insights</h3>
+      <p>Something went wrong while fetching your storage data.</p>
+      <div class="empty-actions">
+        <button class="primary-btn" id="si-retry-btn" type="button">Try Again</button>
+      </div>
+    </div>
+
+    <!-- Empty State -->
+    <div class="si-empty" id="si-empty" hidden>
+      <div class="empty-icon">&#128202;</div>
+      <h3>No storage data yet</h3>
+      <p>Upload your first file to start seeing storage insights.</p>
+      <div class="empty-actions">
+        <button class="primary-btn" id="si-empty-upload-btn" type="button">Upload File</button>
+      </div>
+    </div>
+
+    <!-- Content -->
+    <div class="si-content" id="si-content" hidden>
+      <!-- Hero Card -->
+      <div class="si-hero panel" id="si-hero">
+        <div class="si-hero-left">
+          <div class="si-hero-label">Your Sky</div>
+          <div class="si-hero-size" id="si-hero-size">0 B</div>
+          <div class="si-hero-meta">
+            <span id="si-hero-files">0 files</span>
+            <span class="si-hero-dot"></span>
+            <span id="si-hero-folders">0 folders</span>
+          </div>
+          <div class="si-hero-bar">
+            <div class="si-hero-bar-track">
+              <div class="si-hero-bar-fill" id="si-hero-bar-fill"></div>
+            </div>
+          </div>
+        </div>
+        <div class="si-hero-chart" id="si-hero-chart" role="img" aria-label="Storage distribution chart"></div>
+      </div>
+
+      <!-- Breakdown Section -->
+      <div class="si-section-label">Storage Breakdown</div>
+      <div class="si-breakdown" id="si-breakdown" role="list" aria-label="File type breakdown"></div>
+
+      <!-- Two-column: Largest + Recent -->
+      <div class="si-two-col">
+        <div class="si-col">
+          <div class="si-section-label">Largest Files</div>
+          <div class="si-file-list panel" id="si-largest-files" role="list" aria-label="Largest files"></div>
+        </div>
+        <div class="si-col">
+          <div class="si-section-label">Recently Added</div>
+          <div class="si-file-list panel" id="si-recent-files" role="list" aria-label="Recently added files"></div>
+        </div>
+      </div>
+
+      <!-- Folder Overview -->
+      <div class="si-section-label">Folder Overview</div>
+      <div class="si-folder-overview panel" id="si-folder-overview">
+        <div class="si-folder-count" id="si-folder-count">0 folders</div>
+        <button class="soft-btn" id="si-goto-drive-btn" type="button">Open My Drive</button>
+      </div>
+    </div>
   </div>
 
   <!-- Event Details Modal -->

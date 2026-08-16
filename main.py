@@ -37,6 +37,7 @@ from storage_db import (  # noqa: E402
     get_folder_breadcrumb,
     get_share_by_id,
     get_share_by_token,
+    get_storage_intelligence,
     get_user_by_id,
     get_user_by_telegram_id,
     get_user_file_record,
@@ -1875,6 +1876,23 @@ def get_activity():
     )
 
     return jsonify({"success": True, "activities": activities, "total": len(activities)}), 200
+
+
+# ---------------------------------------------------------------------------
+# Storage Intelligence (Phase 6A)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/storage/stats", methods=["GET"])
+def storage_stats():
+    user = require_auth()
+    if not user:
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+
+    from vault import vault_is_unlocked
+    vault_open = vault_is_unlocked(user["id"])
+
+    stats = get_storage_intelligence(user["id"], vault_unlocked=vault_open)
+    return jsonify({"success": True, **stats}), 200
 
 
 # ---------------------------------------------------------------------------

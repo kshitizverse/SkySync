@@ -1122,6 +1122,126 @@ def get_vault_stats(user_id):
 
 
 # ---------------------------------------------------------------------------
+# Storage Intelligence (Phase 6A)
+# ---------------------------------------------------------------------------
+
+_MIME_CATEGORIES = {
+    "images": ("image/%",),
+    "videos": ("video/%",),
+    "audio": ("audio/%",),
+    "documents": (
+        "application/pdf", "application/msword",
+        "application/vnd.openxmlformats-officedocument%",
+        "application/vnd.ms-%", "text/%",
+        "application/json", "application/xml",
+    ),
+    "archives": (
+        "application/zip", "application/x-rar%", "application/x-7z%",
+        "application/x-tar", "application/gzip",
+    ),
+}
+
+
+def _mime_like_clause(column, patterns):
+    """Build SQL OR LIKE clause for MIME type matching."""
+    parts = []
+    for p in patterns:
+        parts.append(f"{column} LIKE ?")
+    return " OR ".join(parts), list(patterns)
+
+
+def get_storage_intelligence(user_id, vault_unlocked=False):
+    """Return comprehensive storage statistics for a single user.
+
+    Excludes deleted files. Excludes vaulted files unless vault_unlocked.
+    """
+    vault_filter = "" if vault_unlocked else " AND is_vaulted = 0"
+    with get_connection() as conn:
+        # Basic totals
+        totals = conn.execute(
+            f"SELECT COUNT(*) as cnt, COALESCE(SUM(size), 0) as total_size FROM file_records WHERE user_id = ? AND is_deleted = 0{vault_filter}",
+            (user_id,),
+        ).fetchone()
+        file_count = totals["cnt"]
+        total_size = totals["total_size"]
+
+        # Folder count (vault filter applied)
+        folder_count = conn.execute(
+            f"SELECT COUNT(*) as cnt FROM folders WHERE user_id = ? AND is_deleted = 0{vault_filter}",
+            (user_id,),
+        ).fetchone()["cnt"]
+
+        # Average file size
+        avg_size = total_size // file_count if file_count else 0
+
+        # File type breakdown (count + bytes per category)
+        type_breakdown = {}
+        for cat, patterns in _MIME_CATEGORIES.items():
+            where_clause, params = _mime_like_clause("mime_type", patterns)
+            row = conn.execute(
+                f"SELECT COUNT(*) as cnt, COALESCE(SUM(size), 0) as total_bytes FROM file_records WHERE user_id = ? AND is_deleted = 0{vault_filter} AND ({where_clause})",
+                [user_id] + params,
+            ).fetchone()
+            type_breakdown[cat] = {"count": row["cnt"], "bytes": row["total_bytes"]}
+
+        # "other" = files not matching any category
+        all_cat_patterns = []
+        for patterns in _MIME_CATEGORIES.values():
+            all_cat_patterns.extend(patterns)
+        other_where, other_params = _mime_like_clause("mime_type", all_cat_patterns)
+        other_row = conn.execute(
+            f"SELECT COUNT(*) as cnt, COALESCE(SUM(size), 0) as total_bytes FROM file_records WHERE user_id = ? AND is_deleted = 0{vault_filter} AND (mime_type IS NULL OR NOT ({other_where}))",
+            [user_id] + other_params,
+        ).fetchone()
+        type_breakdown["other"] = {"count": other_row["cnt"], "bytes": other_row["total_bytes"]}
+
+        # Percentages
+        for cat in type_breakdown:
+            if total_size > 0:
+                type_breakdown[cat]["percentage"] = round(type_breakdown[cat]["bytes"] / total_size * 100, 1)
+            else:
+                type_breakdown[cat]["percentage"] = 0.0
+
+        # Largest files (top 10) — safe fields only
+        largest_files = rows_to_dicts(conn.execute(
+            f"SELECT id, filename, size, mime_type, uploaded_at, folder_id FROM file_records WHERE user_id = ? AND is_deleted = 0{vault_filter} ORDER BY size DESC LIMIT 10",
+            (user_id,),
+        ).fetchall())
+
+        # Recent files (top 10) — safe fields only
+        recent_files = rows_to_dicts(conn.execute(
+            f"SELECT id, filename, size, mime_type, uploaded_at, folder_id FROM file_records WHERE user_id = ? AND is_deleted = 0{vault_filter} ORDER BY uploaded_at DESC LIMIT 10",
+            (user_id,),
+        ).fetchall())
+
+        # Vault stats
+        vault = {"visible": vault_unlocked}
+        if vault_unlocked:
+            v_files = conn.execute(
+                "SELECT COUNT(*) as cnt, COALESCE(SUM(size), 0) as total_bytes FROM file_records WHERE user_id = ? AND is_deleted = 0 AND is_vaulted = 1",
+                (user_id,),
+            ).fetchone()
+            v_folders = conn.execute(
+                "SELECT COUNT(*) as cnt FROM folders WHERE user_id = ? AND is_deleted = 0 AND is_vaulted = 1",
+                (user_id,),
+            ).fetchone()
+            vault["bytes"] = v_files["total_bytes"]
+            vault["files"] = v_files["cnt"]
+            vault["folders"] = v_folders["cnt"]
+
+        return {
+            "total_size": total_size,
+            "file_count": file_count,
+            "folder_count": folder_count,
+            "average_file_size": avg_size,
+            "type_breakdown": type_breakdown,
+            "largest_files": largest_files,
+            "recent_files": recent_files,
+            "vault": vault,
+        }
+
+
+# ---------------------------------------------------------------------------
 # Activity Events (Phase 5A)
 # ---------------------------------------------------------------------------
 
