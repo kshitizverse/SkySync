@@ -32,6 +32,7 @@ def _cleanup_test_data():
                 uid = row["id"]
                 conn.execute("DELETE FROM vault_settings WHERE user_id = ?", (uid,))
                 conn.execute("DELETE FROM activity_log WHERE user_id = ?", (uid,))
+                conn.execute("DELETE FROM activity_events WHERE user_id = ?", (uid,))
                 conn.execute("DELETE FROM users WHERE id = ?", (uid,))
 
 

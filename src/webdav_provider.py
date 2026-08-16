@@ -24,6 +24,15 @@ def _user_id_from_environ(environ):
     return environ.get("wsgidav.auth.user", {}).get("id")
 
 
+def _record_activity(user_id, event_type, resource_type=None, resource_id=None, metadata=None):
+    """Best-effort activity logging — never raises."""
+    try:
+        from storage_db import record_activity as _rec
+        _rec(user_id, event_type, resource_type=resource_type, resource_id=resource_id, metadata=metadata)
+    except Exception:
+        pass
+
+
 def _parse_webdav_path(path):
     """Return (parent_path_parts, name) for a WebDAV path.
 
@@ -195,6 +204,7 @@ class SkySyncFolder(DAVCollection):
         parent_id = self._folder["id"] if self._folder else None
         create_folder(user_id, name, parent_id=parent_id)
         log_activity(user_id, "webdav_create_folder", detail=name)
+        _record_activity(user_id, "WEBDAV_FOLDER_CREATED", resource_type="folder", metadata={"name": name})
         child_path = self.path.rstrip("/") + "/" + name
         new_folder = {"id": None, "name": name, "parent_id": parent_id, "created_at": datetime.now(timezone.utc).isoformat()}
         return SkySyncFolder(child_path, self.environ, new_folder)
@@ -234,6 +244,7 @@ class SkySyncFolder(DAVCollection):
         try:
             soft_delete_folder(self._folder["id"], user_id)
             log_activity(user_id, "webdav_delete_folder", detail=self._folder["name"])
+            _record_activity(user_id, "WEBDAV_DELETE", resource_type="folder", resource_id=self._folder["id"], metadata={"name": self._folder["name"]})
         except Exception as exc:
             logger.error("WebDAV folder delete failed: %s", exc)
             from wsgidav.dav_provider import DAVError
@@ -261,6 +272,7 @@ class SkySyncFolder(DAVCollection):
         from storage_db import rename_folder, log_activity
         rename_folder(self._folder["id"], user_id, new_name)
         log_activity(user_id, "webdav_rename_folder", detail=f"{self._folder['name']} -> {new_name}")
+        _record_activity(user_id, "WEBDAV_MOVE", resource_type="folder", resource_id=self._folder["id"], metadata={"old_name": self._folder["name"], "new_name": new_name})
         return True
 
     def copy_move_single(self, dest_path, *, is_move):
@@ -365,6 +377,7 @@ class SkySyncFile(DAVNonCollection):
                 return io.BytesIO(b"")
             with open(tmp_path, "rb") as f:
                 data = f.read()
+            _record_activity(user_id, "WEBDAV_DOWNLOAD", resource_type="file", resource_id=self._record.get("id"), metadata={"filename": self._record.get("filename")})
             return io.BytesIO(data)
         except Exception as exc:
             logger.error("WebDAV download failed: %s", exc)
@@ -458,6 +471,7 @@ class SkySyncFile(DAVNonCollection):
         if folder_id and record:
             move_file_to_folder(record["id"], user_id, folder_id)
         log_activity(user_id, "webdav_upload", detail=filename)
+        _record_activity(user_id, "WEBDAV_UPLOAD", resource_type="file", resource_id=record["id"] if record else None, metadata={"filename": filename, "size": size})
 
     def delete(self):
         user_id = _user_id_from_environ(self.environ)
@@ -477,6 +491,7 @@ class SkySyncFile(DAVNonCollection):
         from storage_db import soft_delete_file, log_activity
         soft_delete_file(self._record["id"], user_id)
         log_activity(user_id, "webdav_delete_file", detail=self._record.get("filename"))
+        _record_activity(user_id, "WEBDAV_DELETE", resource_type="file", resource_id=self._record["id"], metadata={"filename": self._record.get("filename")})
 
     def handle_move(self, dest_path):
         user_id = _user_id_from_environ(self.environ)
@@ -501,6 +516,7 @@ class SkySyncFile(DAVNonCollection):
         old_name = self._record.get("filename", "")
         update_file_record_name(self._record["id"], user_id, new_name)
         log_activity(user_id, "webdav_rename_file", detail=f"{old_name} -> {new_name}")
+        _record_activity(user_id, "WEBDAV_MOVE", resource_type="file", resource_id=self._record["id"], metadata={"old_name": old_name, "new_name": new_name})
         return True
 
     def copy_move_single(self, dest_path, *, is_move):

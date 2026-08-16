@@ -52,6 +52,7 @@ from storage_db import (  # noqa: E402
     list_users,
     list_webdav_tokens,
     log_activity,
+    record_activity,
     move_file_to_folder,
     permanent_delete_file,
     permanent_delete_folder,
@@ -1156,6 +1157,10 @@ def upload_file():
                 pass
         rate_limit.remember(ip_key)
         log_activity(user["id"], "upload", detail=safe_name, ip_address=client_ip())
+        record_activity(
+            user["id"], "FILE_UPLOADED", resource_type="file", resource_id=record["id"],
+            metadata={"filename": safe_name, "size": file_size, "mime_type": file.mimetype},
+        )
         return jsonify({
             "success": True,
             "message": f"File {safe_name} uploaded successfully",
@@ -1196,6 +1201,10 @@ def download_file(file_id):
         if not success or not os.path.exists(output_path):
             return jsonify({"success": False, "error": "Download failed"}), 500
         log_activity(user["id"], "download", detail=record["filename"], ip_address=client_ip())
+        record_activity(
+            user["id"], "FILE_DOWNLOADED", resource_type="file", resource_id=file_id,
+            metadata={"filename": record["filename"], "size": record.get("size")},
+        )
         return send_file(output_path, as_attachment=True, download_name=record["filename"])
     finally:
         if os.path.exists(output_path):
@@ -1236,6 +1245,10 @@ def preview_file(file_id):
         if not success or not os.path.exists(preview_path):
             return jsonify({"success": False, "error": "Preview download failed"}), 500
 
+    record_activity(
+        user["id"], "FILE_PREVIEWED", resource_type="file", resource_id=file_id,
+        metadata={"filename": record["filename"]},
+    )
     return send_file(
         preview_path,
         mimetype=record.get("mime_type") or None,
@@ -1261,6 +1274,10 @@ def delete_file(file_id):
 
     soft_delete_file(file_id, user["id"])
     log_activity(user["id"], "trash", detail=record["filename"], ip_address=client_ip())
+    record_activity(
+        user["id"], "FILE_DELETED", resource_type="file", resource_id=file_id,
+        metadata={"filename": record["filename"]},
+    )
     return jsonify({"success": True, "message": "File moved to trash"}), 200
 
 
@@ -1289,6 +1306,10 @@ def rename_file(file_id):
         return jsonify({"success": False, "error": "Rename failed"}), 500
 
     log_activity(user["id"], "rename", detail=f"{record['filename']} -> {new_name}", ip_address=client_ip())
+    record_activity(
+        user["id"], "FILE_RENAMED", resource_type="file", resource_id=file_id,
+        metadata={"old_name": record["filename"], "new_name": new_name},
+    )
     return jsonify({
         "success": True,
         "message": "File renamed successfully",
@@ -1315,9 +1336,15 @@ def toggle_file_favorite(file_id):
     if not updated:
         return jsonify({"success": False, "error": "Failed to toggle favorite"}), 500
 
+    is_fav = bool(updated.get("is_favorite", 0))
+    record_activity(
+        user["id"], "FILE_FAVORITED" if is_fav else "FILE_UNFAVORITED",
+        resource_type="file", resource_id=file_id,
+        metadata={"filename": record["filename"]},
+    )
     return jsonify({
         "success": True,
-        "is_favorite": bool(updated.get("is_favorite", 0)),
+        "is_favorite": is_fav,
         "message": "Favorite updated",
     }), 200
 
@@ -1333,6 +1360,10 @@ def restore_file_endpoint(file_id):
         return jsonify({"success": False, "error": "File not found in trash"}), 404
 
     log_activity(user["id"], "restore", detail=record.get("filename"), ip_address=client_ip())
+    record_activity(
+        user["id"], "FILE_RESTORED", resource_type="file", resource_id=file_id,
+        metadata={"filename": record.get("filename")},
+    )
     return jsonify({"success": True, "message": "File restored", "file": file_record_to_api(record)}), 200
 
 
@@ -1360,6 +1391,10 @@ def permanent_delete_file_endpoint(file_id):
 
     permanent_delete_file(file_id, user["id"])
     log_activity(user["id"], "permanent_delete", detail=record.get("filename"), ip_address=client_ip())
+    record_activity(
+        user["id"], "FILE_PERMANENTLY_DELETED", resource_type="file", resource_id=file_id,
+        metadata={"filename": record.get("filename")},
+    )
     return jsonify({"success": True, "message": "File permanently deleted"}), 200
 
 
@@ -1389,6 +1424,10 @@ def bulk_delete_files():
             if record.get("is_vaulted") and not vault_open:
                 continue
             soft_delete_file(fid_int, user["id"])
+            record_activity(
+                user["id"], "FILE_DELETED", resource_type="file", resource_id=fid_int,
+                metadata={"filename": record["filename"]},
+            )
             deleted += 1
 
     return jsonify({"success": True, "message": f"{deleted} file(s) moved to trash", "deleted": deleted}), 200
@@ -1413,6 +1452,10 @@ def bulk_restore_files():
             continue
         record = restore_file(fid_int, user["id"])
         if record:
+            record_activity(
+                user["id"], "FILE_RESTORED", resource_type="file", resource_id=fid_int,
+                metadata={"filename": record.get("filename")},
+            )
             restored += 1
 
     return jsonify({"success": True, "message": f"{restored} file(s) restored", "restored": restored}), 200
@@ -1497,6 +1540,10 @@ def create_file_share(file_id):
     )
     rate_limit.remember(ip_key)
     log_activity(user["id"], "share", detail=f"Shared {record['filename']}", ip_address=client_ip())
+    record_activity(
+        user["id"], "SHARE_CREATED", resource_type="file", resource_id=file_id,
+        metadata={"filename": record["filename"], "share_token": share["share_token"]},
+    )
 
     share_url = url_for("share_view", token=share["share_token"], _external=True)
     return jsonify({
@@ -1560,6 +1607,10 @@ def revoke_share_endpoint(share_id):
 
     revoke_share(share_id, user["id"])
     log_activity(user["id"], "share_revoke", detail=f"Revoked share {share_id}", ip_address=client_ip())
+    record_activity(
+        user["id"], "SHARE_REVOKED", resource_type="file", resource_id=share["file_id"],
+        metadata={"share_id": share_id},
+    )
     return jsonify({"success": True, "message": "Share link revoked"}), 200
 
 
@@ -1654,6 +1705,10 @@ def shared_download(token):
         if share.get("one_time"):
             invalidate_one_time_share(share["id"])
 
+        record_activity(
+            share["owner_user_id"], "SHARE_ACCESSED", resource_type="file", resource_id=record["id"],
+            metadata={"filename": record["filename"], "share_token": share["share_token"]},
+        )
         return send_file(output_path, as_attachment=True, download_name=record["filename"])
     except Exception as exc:
         logger.error("Shared download error: %s", exc)
@@ -1808,16 +1863,18 @@ def get_activity():
     if not user:
         return jsonify({"success": False, "error": "Unauthorized"}), 401
 
-    from storage_db import get_connection as _conn
-    with _conn() as conn:
-        activities = [
-            dict(r) for r in conn.execute(
-                "SELECT action, detail, ip_address, created_at FROM activity_log WHERE user_id = ? ORDER BY created_at DESC LIMIT 50",
-                (user["id"],),
-            ).fetchall()
-        ]
+    limit = request.args.get("limit", 50, type=int)
+    offset = request.args.get("offset", 0, type=int)
+    event_type = request.args.get("event_type")
+    resource_type = request.args.get("resource_type")
 
-    return jsonify({"success": True, "activities": activities}), 200
+    from storage_db import get_user_activity
+    activities = get_user_activity(
+        user["id"], limit=limit, offset=offset,
+        event_type=event_type, resource_type=resource_type,
+    )
+
+    return jsonify({"success": True, "activities": activities, "total": len(activities)}), 200
 
 
 # ---------------------------------------------------------------------------
@@ -1926,6 +1983,10 @@ def create_folder_endpoint():
             parent_id = None
     folder = create_folder(user["id"], name, parent_id=parent_id)
     log_activity(user["id"], "folder_create", detail=f"Created folder: {name}", ip_address=client_ip())
+    record_activity(
+        user["id"], "FOLDER_CREATED", resource_type="folder", resource_id=folder["id"],
+        metadata={"name": name},
+    )
     return jsonify({"success": True, "folder": folder}), 201
 
 
@@ -1949,6 +2010,10 @@ def rename_folder_endpoint(folder_id):
         return jsonify({"success": False, "error": "Folder name is required"}), 400
     rename_folder(folder_id, user["id"], new_name)
     log_activity(user["id"], "folder_rename", detail=f"Renamed folder {folder_id} to {new_name}", ip_address=client_ip())
+    record_activity(
+        user["id"], "FOLDER_RENAMED", resource_type="folder", resource_id=folder_id,
+        metadata={"old_name": folder["name"], "new_name": new_name},
+    )
     return jsonify({"success": True, "message": "Folder renamed"}), 200
 
 
@@ -1968,6 +2033,10 @@ def delete_folder_endpoint(folder_id):
 
     soft_delete_folder(folder_id, user["id"])
     log_activity(user["id"], "folder_delete", detail=f"Deleted folder: {folder['name']}", ip_address=client_ip())
+    record_activity(
+        user["id"], "FOLDER_DELETED", resource_type="folder", resource_id=folder_id,
+        metadata={"name": folder["name"]},
+    )
     return jsonify({"success": True, "message": "Folder moved to trash"}), 200
 
 
@@ -1978,6 +2047,9 @@ def restore_folder_endpoint(folder_id):
         return jsonify({"success": False, "error": "Unauthorized"}), 401
     restore_folder(folder_id, user["id"])
     log_activity(user["id"], "folder_restore", detail=f"Restored folder {folder_id}", ip_address=client_ip())
+    record_activity(
+        user["id"], "FOLDER_RESTORED", resource_type="folder", resource_id=folder_id,
+    )
     return jsonify({"success": True, "message": "Folder restored"}), 200
 
 
@@ -1995,6 +2067,10 @@ def permanent_delete_folder_endpoint(folder_id):
 
     permanent_delete_folder(folder_id, user["id"])
     log_activity(user["id"], "folder_permanent_delete", detail=f"Permanently deleted folder {folder_id}", ip_address=client_ip())
+    record_activity(
+        user["id"], "FOLDER_PERMANENTLY_DELETED", resource_type="folder", resource_id=folder_id,
+        metadata={"name": folder["name"] if folder else None},
+    )
     return jsonify({"success": True, "message": "Folder permanently deleted"}), 200
 
 
@@ -2032,6 +2108,10 @@ def move_file_endpoint(file_id):
     if not success:
         return jsonify({"success": False, "error": "Folder not found"}), 404
     log_activity(user["id"], "file_move", detail=f"Moved file {file_id} to folder {folder_id}", ip_address=client_ip())
+    record_activity(
+        user["id"], "FILE_MOVED", resource_type="file", resource_id=file_id,
+        metadata={"filename": file["filename"], "folder_id": folder_id},
+    )
     return jsonify({"success": True, "message": "File moved"}), 200
 
 

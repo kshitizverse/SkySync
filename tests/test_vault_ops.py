@@ -41,6 +41,7 @@ def _cleanup_test_data():
                 uid = row["id"]
                 conn.execute("DELETE FROM vault_settings WHERE user_id = ?", (uid,))
                 conn.execute("DELETE FROM activity_log WHERE user_id = ?", (uid,))
+                conn.execute("DELETE FROM activity_events WHERE user_id = ?", (uid,))
                 conn.execute("DELETE FROM file_records WHERE user_id = ?", (uid,))
                 conn.execute("DELETE FROM folders WHERE user_id = ?", (uid,))
                 conn.execute("DELETE FROM file_shares WHERE owner_user_id = ?", (uid,))

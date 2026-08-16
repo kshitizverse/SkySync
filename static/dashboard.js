@@ -29,6 +29,7 @@ const state = {
 
 document.addEventListener('DOMContentLoaded', () => {
   setupEventListeners();
+  setupActivityListeners();
   bootstrapWorkspace();
   setupNavigationGuards();
 });
@@ -128,6 +129,16 @@ function setupEventListeners() {
         btn.classList.add('active');
         document.getElementById('shares-view').hidden = false;
         loadShares();
+        closeSidebar();
+        return;
+      }
+      if (view === 'activity') {
+        state.currentView = 'activity';
+        document.querySelectorAll('.sidebar-nav .nav-item').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        showMainViews();
+        document.getElementById('activity-view').hidden = false;
+        loadActivity();
         closeSidebar();
         return;
       }
@@ -630,10 +641,12 @@ function renderWorkspace() {
         </div>
         <div class="file-actions folder-actions">
           <button class="soft-btn small folder-open-btn" type="button">Open</button>
+          <button class="soft-btn small folder-history-btn" type="button">&#128339;</button>
           <button class="soft-btn small folder-delete-btn" type="button">Delete</button>
         </div>
       `;
       card.querySelector('.folder-open-btn').addEventListener('click', () => navigateFolder(folder.id));
+      card.querySelector('.folder-history-btn').addEventListener('click', () => openHistoryModal('folder', folder.id, folder.name));
       card.querySelector('.folder-delete-btn').addEventListener('click', () => deleteFolder(folder.id, folder.name));
       card.addEventListener('dblclick', () => navigateFolder(folder.id));
       fragment.appendChild(card);
@@ -802,6 +815,7 @@ function handleFileAction(action, file) {
     case 'move': openMoveModal(file); break;
     case 'vault-move': vaultMoveFile(file); break;
     case 'vault-restore': vaultRestoreFile(file); break;
+    case 'history': openHistoryModal('file', file.id, file.name); break;
   }
 }
 
@@ -1098,6 +1112,7 @@ function showMainViews() {
   document.getElementById('shares-view').hidden = true;
   document.getElementById('vault-view').hidden = true;
   document.getElementById('vault-lock-screen').hidden = true;
+  document.getElementById('activity-view').hidden = true;
 }
 
 async function restoreSingleFile(file) {
@@ -1650,6 +1665,352 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+// ---------------------------------------------------------------------------
+// Activity Timeline (Phase 5B)
+// ---------------------------------------------------------------------------
+
+const ACTIVITY_ICONS = {
+  FILE_UPLOADED: '&#11015;',
+  FILE_DOWNLOADED: '&#11015;',
+  FILE_PREVIEWED: '&#128065;',
+  FILE_RENAMED: '&#9998;',
+  FILE_FAVORITED: '&#9733;',
+  FILE_UNFAVORITED: '&#9734;',
+  FILE_MOVED: '&#128194;',
+  FILE_DELETED: '&#128465;',
+  FILE_RESTORED: '&#128260;',
+  FILE_PERMANENTLY_DELETED: '&#128465;',
+  FOLDER_CREATED: '&#128193;',
+  FOLDER_RENAMED: '&#9998;',
+  FOLDER_MOVED: '&#128194;',
+  FOLDER_DELETED: '&#128465;',
+  FOLDER_RESTORED: '&#128260;',
+  FOLDER_PERMANENTLY_DELETED: '&#128465;',
+  VAULT_UNLOCKED: '&#128275;',
+  VAULT_LOCKED: '&#128274;',
+  FILE_MOVED_TO_VAULT: '&#128274;',
+  FILE_RESTORED_FROM_VAULT: '&#128275;',
+  FOLDER_MOVED_TO_VAULT: '&#128274;',
+  FOLDER_RESTORED_FROM_VAULT: '&#128275;',
+  SHARE_CREATED: '&#128279;',
+  SHARE_ACCESSED: '&#128279;',
+  SHARE_REVOKED: '&#128279;',
+  WEBDAV_UPLOAD: '&#9729;',
+  WEBDAV_DOWNLOAD: '&#9729;',
+  WEBDAV_MOVE: '&#9729;',
+  WEBDAV_DELETE: '&#9729;',
+  WEBDAV_FOLDER_CREATED: '&#9729;',
+};
+
+const ACTIVITY_COLORS = {
+  FILE_UPLOADED: 'activity-color-green',
+  FILE_DOWNLOADED: 'activity-color-blue',
+  FILE_PREVIEWED: 'activity-color-blue',
+  FILE_RENAMED: 'activity-color-yellow',
+  FILE_FAVORITED: 'activity-color-yellow',
+  FILE_UNFAVORITED: 'activity-color-muted',
+  FILE_MOVED: 'activity-color-blue',
+  FILE_DELETED: 'activity-color-red',
+  FILE_RESTORED: 'activity-color-green',
+  FILE_PERMANENTLY_DELETED: 'activity-color-red',
+  FOLDER_CREATED: 'activity-color-green',
+  FOLDER_RENAMED: 'activity-color-yellow',
+  FOLDER_MOVED: 'activity-color-blue',
+  FOLDER_DELETED: 'activity-color-red',
+  FOLDER_RESTORED: 'activity-color-green',
+  FOLDER_PERMANENTLY_DELETED: 'activity-color-red',
+  VAULT_UNLOCKED: 'activity-color-green',
+  VAULT_LOCKED: 'activity-color-muted',
+  FILE_MOVED_TO_VAULT: 'activity-color-purple',
+  FILE_RESTORED_FROM_VAULT: 'activity-color-green',
+  FOLDER_MOVED_TO_VAULT: 'activity-color-purple',
+  FOLDER_RESTORED_FROM_VAULT: 'activity-color-green',
+  SHARE_CREATED: 'activity-color-blue',
+  SHARE_ACCESSED: 'activity-color-blue',
+  SHARE_REVOKED: 'activity-color-red',
+  WEBDAV_UPLOAD: 'activity-color-blue',
+  WEBDAV_DOWNLOAD: 'activity-color-blue',
+  WEBDAV_MOVE: 'activity-color-yellow',
+  WEBDAV_DELETE: 'activity-color-red',
+  WEBDAV_FOLDER_CREATED: 'activity-color-blue',
+};
+
+const ACTIVITY_FILTER_MAP = {
+  all: null,
+  files: 'file',
+  folders: 'folder',
+  vault: 'vault',
+  shares: 'share',
+  webdav: 'webdav',
+};
+
+const activityState = {
+  events: [],
+  filter: 'all',
+  offset: 0,
+  limit: 50,
+  hasMore: true,
+  loading: false,
+};
+
+function describeEvent(ev) {
+  const meta = ev.metadata ? (typeof ev.metadata === 'string' ? safeParseJson(ev.metadata) : ev.metadata) : {};
+  const fn = meta.filename || meta.name || '';
+  const oldName = meta.old_name || '';
+  const newName = meta.new_name || '';
+  switch (ev.event_type) {
+    case 'FILE_UPLOADED': return { text: 'Uploaded', detail: fn };
+    case 'FILE_DOWNLOADED': return { text: 'Downloaded', detail: fn };
+    case 'FILE_PREVIEWED': return { text: 'Previewed', detail: fn };
+    case 'FILE_RENAMED': return { text: 'Renamed', detail: oldName && newName ? `${oldName} \u2192 ${newName}` : fn };
+    case 'FILE_FAVORITED': return { text: 'Favorited', detail: fn };
+    case 'FILE_UNFAVORITED': return { text: 'Unfavorited', detail: fn };
+    case 'FILE_MOVED': return { text: 'Moved', detail: fn };
+    case 'FILE_DELETED': return { text: 'Deleted', detail: fn };
+    case 'FILE_RESTORED': return { text: 'Restored', detail: fn };
+    case 'FILE_PERMANENTLY_DELETED': return { text: 'Permanently deleted', detail: fn };
+    case 'FOLDER_CREATED': return { text: 'Created folder', detail: meta.name || '' };
+    case 'FOLDER_RENAMED': return { text: 'Renamed folder', detail: oldName && newName ? `${oldName} \u2192 ${newName}` : meta.name || '' };
+    case 'FOLDER_MOVED': return { text: 'Moved folder', detail: meta.name || '' };
+    case 'FOLDER_DELETED': return { text: 'Deleted folder', detail: meta.name || '' };
+    case 'FOLDER_RESTORED': return { text: 'Restored folder', detail: meta.name || '' };
+    case 'FOLDER_PERMANENTLY_DELETED': return { text: 'Permanently deleted folder', detail: meta.name || '' };
+    case 'VAULT_UNLOCKED': return { text: 'Unlocked Vault', detail: '' };
+    case 'VAULT_LOCKED': return { text: 'Locked Vault', detail: '' };
+    case 'FILE_MOVED_TO_VAULT': return { text: 'Moved to Vault', detail: fn };
+    case 'FILE_RESTORED_FROM_VAULT': return { text: 'Restored from Vault', detail: fn };
+    case 'FOLDER_MOVED_TO_VAULT': return { text: 'Moved folder to Vault', detail: meta.name || '' };
+    case 'FOLDER_RESTORED_FROM_VAULT': return { text: 'Restored folder from Vault', detail: meta.name || '' };
+    case 'SHARE_CREATED': return { text: 'Created share link', detail: fn };
+    case 'SHARE_ACCESSED': return { text: 'Share accessed', detail: fn };
+    case 'SHARE_REVOKED': return { text: 'Revoked share link', detail: fn };
+    case 'WEBDAV_UPLOAD': return { text: 'Uploaded via WebDAV', detail: fn };
+    case 'WEBDAV_DOWNLOAD': return { text: 'Downloaded via WebDAV', detail: fn };
+    case 'WEBDAV_MOVE': return { text: 'Renamed via WebDAV', detail: oldName && newName ? `${oldName} \u2192 ${newName}` : fn };
+    case 'WEBDAV_DELETE': return { text: 'Deleted via WebDAV', detail: fn };
+    case 'WEBDAV_FOLDER_CREATED': return { text: 'Created folder via WebDAV', detail: meta.name || '' };
+    default: return { text: ev.event_type, detail: fn };
+  }
+}
+
+function safeParseJson(str) {
+  try { return JSON.parse(str); } catch (e) { return {}; }
+}
+
+function formatActivityTime(isoStr) {
+  if (!isoStr) return '';
+  try {
+    const d = new Date(isoStr);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  } catch (e) { return ''; }
+}
+
+function formatActivityDate(isoStr) {
+  if (!isoStr) return '';
+  try {
+    const d = new Date(isoStr);
+    if (isNaN(d.getTime())) return '';
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const eventDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const diff = today - eventDay;
+    if (diff < 86400000 && today.getDate() === eventDay.getDate()) return 'Today';
+    if (diff < 172800000) return 'Yesterday';
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
+  } catch (e) { return ''; }
+}
+
+function formatHistoryTime(isoStr) {
+  if (!isoStr) return '';
+  try {
+    const d = new Date(isoStr);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) + ', ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  } catch (e) { return ''; }
+}
+
+function groupEventsByDate(events) {
+  const groups = [];
+  let currentLabel = '';
+  for (const ev of events) {
+    const label = formatActivityDate(ev.created_at);
+    if (label !== currentLabel) {
+      currentLabel = label;
+      groups.push({ label, events: [] });
+    }
+    groups[groups.length - 1].events.push(ev);
+  }
+  return groups;
+}
+
+async function loadActivity(reset) {
+  if (activityState.loading) return;
+  if (reset) {
+    activityState.events = [];
+    activityState.offset = 0;
+    activityState.hasMore = true;
+  }
+  activityState.loading = true;
+  document.getElementById('activity-loading').hidden = false;
+  document.getElementById('activity-empty').hidden = true;
+  document.getElementById('activity-timeline').innerHTML = '';
+  document.getElementById('activity-load-more').hidden = true;
+  try {
+    const resourceType = ACTIVITY_FILTER_MAP[activityState.filter];
+    const params = ['limit=' + activityState.limit, 'offset=' + activityState.offset];
+    if (resourceType) params.push('resource_type=' + resourceType);
+    const url = '/api/user/activity?' + params.join('&');
+    const result = await fetchJSON(url);
+    const newEvents = result.activities || [];
+    if (reset) activityState.events = newEvents;
+    else activityState.events = activityState.events.concat(newEvents);
+    activityState.hasMore = newEvents.length >= activityState.limit;
+    activityState.offset = activityState.events.length;
+    renderActivity();
+  } catch (error) {
+    showToast(error.message || 'Failed to load activity', 'error');
+  } finally {
+    activityState.loading = false;
+    document.getElementById('activity-loading').hidden = true;
+  }
+}
+
+function renderActivity() {
+  const container = document.getElementById('activity-timeline');
+  const emptyEl = document.getElementById('activity-empty');
+  const loadMoreEl = document.getElementById('activity-load-more');
+  container.innerHTML = '';
+  if (!activityState.events.length) {
+    emptyEl.hidden = false;
+    loadMoreEl.hidden = true;
+    return;
+  }
+  emptyEl.hidden = true;
+  loadMoreEl.hidden = !activityState.hasMore;
+  const groups = groupEventsByDate(activityState.events);
+  for (const group of groups) {
+    const dateEl = document.createElement('div');
+    dateEl.className = 'activity-date-group';
+    dateEl.setAttribute('role', 'listitem');
+    dateEl.innerHTML = '<div class="activity-date-label">' + escapeHtml(group.label) + '</div>';
+    for (const ev of group.events) {
+      const desc = describeEvent(ev);
+      const icon = ACTIVITY_ICONS[ev.event_type] || '&#128196;';
+      const colorClass = ACTIVITY_COLORS[ev.event_type] || 'activity-color-muted';
+      const time = formatActivityTime(ev.created_at);
+      const eventEl = document.createElement('div');
+      eventEl.className = 'activity-event';
+      eventEl.setAttribute('role', 'listitem');
+      eventEl.tabIndex = 0;
+      eventEl.dataset.eventId = ev.id || '';
+      eventEl.dataset.eventType = ev.event_type || '';
+      eventEl.dataset.resourceType = ev.resource_type || '';
+      eventEl.dataset.resourceId = ev.resource_id || '';
+      eventEl.dataset.metadata = ev.metadata || '';
+      eventEl.dataset.createdAt = ev.created_at || '';
+      eventEl.innerHTML =
+        '<div class="activity-event-icon ' + colorClass + '">' + icon + '</div>' +
+        '<div class="activity-event-content">' +
+          '<div class="activity-event-text">' + escapeHtml(desc.text) + '</div>' +
+          (desc.detail ? '<div class="activity-event-detail">' + escapeHtml(desc.detail) + '</div>' : '') +
+        '</div>' +
+        '<div class="activity-event-time">' + escapeHtml(time) + '</div>';
+      eventEl.addEventListener('click', function() { openEventDetails(this); });
+      eventEl.addEventListener('keydown', function(e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openEventDetails(this); } });
+      dateEl.appendChild(eventEl);
+    }
+    container.appendChild(dateEl);
+  }
+}
+
+function openEventDetails(el) {
+  const eventType = el.dataset.eventType;
+  const resourceType = el.dataset.resourceType;
+  const resourceId = el.dataset.resourceId;
+  const metaStr = el.dataset.metadata;
+  const createdAt = el.dataset.createdAt;
+  const meta = metaStr ? safeParseJson(metaStr) : {};
+  const desc = describeEvent({ event_type: eventType, metadata: meta });
+  document.getElementById('event-details-title').textContent = desc.text;
+  document.getElementById('event-details-subtitle').textContent = desc.detail || '';
+  const body = document.getElementById('event-details-body');
+  let html = '<div class="event-detail-row"><span class="event-detail-label">Time</span><span class="event-detail-value">' + escapeHtml(formatHistoryTime(createdAt)) + '</span></div>';
+  if (eventType === 'FILE_RENAMED' || eventType === 'FOLDER_RENAMED' || eventType === 'WEBDAV_MOVE') {
+    if (meta.old_name) html += '<div class="event-detail-row"><span class="event-detail-label">Old name</span><span class="event-detail-value">' + escapeHtml(meta.old_name) + '</span></div>';
+    if (meta.new_name) html += '<div class="event-detail-row"><span class="event-detail-label">New name</span><span class="event-detail-value">' + escapeHtml(meta.new_name) + '</span></div>';
+  }
+  if (meta.size !== undefined && meta.size !== null) {
+    html += '<div class="event-detail-row"><span class="event-detail-label">Size</span><span class="event-detail-value">' + escapeHtml(formatSize(meta.size)) + '</span></div>';
+  }
+  if (meta.mime_type) {
+    html += '<div class="event-detail-row"><span class="event-detail-label">Type</span><span class="event-detail-value">' + escapeHtml(meta.mime_type) + '</span></div>';
+  }
+  body.innerHTML = html;
+  openModal('event-details-modal');
+}
+
+function openHistoryModal(resourceType, resourceId, resourceName) {
+  document.getElementById('history-modal-title').textContent = resourceType === 'folder' ? 'Folder History' : 'File History';
+  document.getElementById('history-modal-filename').textContent = resourceName || '';
+  document.getElementById('history-modal-body').innerHTML = '<div class="activity-loading"><div class="skeleton-timeline"><div class="skeleton skeleton-event"></div><div class="skeleton skeleton-event"></div></div></div>';
+  openModal('history-modal');
+  loadHistoryEvents(resourceType, resourceId);
+}
+
+async function loadHistoryEvents(resourceType, resourceId) {
+  try {
+    const url = '/api/user/activity?resource_type=' + encodeURIComponent(resourceType) + '&limit=50&offset=0';
+    const result = await fetchJSON(url);
+    let events = result.activities || [];
+    events = events.filter(function(ev) { return String(ev.resource_id) === String(resourceId); });
+    renderHistoryEvents(events);
+  } catch (error) {
+    document.getElementById('history-modal-body').innerHTML = '<div class="activity-empty"><p>Failed to load history.</p></div>';
+  }
+}
+
+function renderHistoryEvents(events) {
+  const body = document.getElementById('history-modal-body');
+  if (!events.length) {
+    body.innerHTML = '<div class="activity-empty"><p>No history found.</p></div>';
+    return;
+  }
+  let html = '<div class="history-timeline">';
+  for (const ev of events) {
+    const desc = describeEvent(ev);
+    const icon = ACTIVITY_ICONS[ev.event_type] || '&#128196;';
+    const colorClass = ACTIVITY_COLORS[ev.event_type] || 'activity-color-muted';
+    const time = formatHistoryTime(ev.created_at);
+    html += '<div class="history-event">' +
+      '<div class="activity-event-icon ' + colorClass + '">' + icon + '</div>' +
+      '<div class="history-event-content">' +
+        '<div class="activity-event-text">' + escapeHtml(desc.text) + '</div>' +
+        '<div class="history-event-time">' + escapeHtml(time) + '</div>' +
+      '</div>' +
+    '</div>';
+  }
+  html += '</div>';
+  body.innerHTML = html;
+}
+
+function setupActivityListeners() {
+  document.querySelectorAll('.activity-filter-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      document.querySelectorAll('.activity-filter-btn').forEach(function(b) { b.classList.remove('active'); b.setAttribute('aria-checked', 'false'); });
+      btn.classList.add('active');
+      btn.setAttribute('aria-checked', 'true');
+      activityState.filter = btn.dataset.filter;
+      loadActivity(true);
+    });
+  });
+  document.getElementById('activity-refresh-btn').addEventListener('click', function() { loadActivity(true); });
+  document.getElementById('activity-load-more-btn').addEventListener('click', function() { loadActivity(false); });
+  document.getElementById('activity-empty-goto-drive').addEventListener('click', function() {
+    document.querySelector('[data-view="files"]').click();
+  });
 }
 
 // WebDAV token management

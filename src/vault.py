@@ -302,6 +302,7 @@ def unlock():
     reset_vault_failed_attempts(user["id"])
     vault_unlock(user["id"])
     log_activity(user["id"], "vault_unlocked", ip_address=_client_ip())
+    _record_vault_activity(user["id"], "VAULT_UNLOCKED")
     return jsonify({"success": True, "message": "Vault unlocked"}), 200
 
 
@@ -314,6 +315,7 @@ def lock():
 
     vault_lock()
     log_activity(user["id"], "vault_locked", ip_address=_client_ip())
+    _record_vault_activity(user["id"], "VAULT_LOCKED")
     return jsonify({"success": True, "message": "Vault locked"}), 200
 
 
@@ -348,6 +350,15 @@ def log_activity(user_id, action, detail=None, ip_address=None):
     try:
         from storage_db import log_activity as _log
         _log(user_id, action, detail=detail, ip_address=ip_address)
+    except Exception:
+        pass
+
+
+def _record_vault_activity(user_id, event_type, resource_type=None, resource_id=None, metadata=None):
+    """Thin wrapper for record_activity — best-effort, never raises."""
+    try:
+        from storage_db import record_activity as _rec
+        _rec(user_id, event_type, resource_type=resource_type, resource_id=resource_id, metadata=metadata)
     except Exception:
         pass
 
@@ -390,6 +401,7 @@ def vault_move():
                 (res_id, user["id"]),
             )
         log_activity(user["id"], "vault_file_moved", detail=record["filename"], ip_address=_client_ip())
+        _record_vault_activity(user["id"], "FILE_MOVED_TO_VAULT", resource_type="file", resource_id=res_id, metadata={"filename": record["filename"]})
         return jsonify({"success": True, "message": "File moved to Vault"}), 200
 
     else:  # folder
@@ -401,6 +413,7 @@ def vault_move():
             return jsonify({"success": False, "error": "Folder is already in Vault"}), 400
         vault_folder(res_id, user["id"])
         log_activity(user["id"], "vault_folder_moved", detail=folder["name"], ip_address=_client_ip())
+        _record_vault_activity(user["id"], "FOLDER_MOVED_TO_VAULT", resource_type="folder", resource_id=res_id, metadata={"name": folder["name"]})
         return jsonify({"success": True, "message": "Folder moved to Vault"}), 200
 
 
@@ -431,6 +444,7 @@ def vault_restore():
             return jsonify({"success": False, "error": "File is not in Vault"}), 400
         unvault_file(res_id, user["id"])
         log_activity(user["id"], "vault_file_restored", detail=record["filename"], ip_address=_client_ip())
+        _record_vault_activity(user["id"], "FILE_RESTORED_FROM_VAULT", resource_type="file", resource_id=res_id, metadata={"filename": record["filename"]})
         return jsonify({"success": True, "message": "File restored from Vault"}), 200
 
     else:  # folder
@@ -442,6 +456,7 @@ def vault_restore():
             return jsonify({"success": False, "error": "Folder is not in Vault"}), 400
         unvault_folder(res_id, user["id"])
         log_activity(user["id"], "vault_folder_restored", detail=folder["name"], ip_address=_client_ip())
+        _record_vault_activity(user["id"], "FOLDER_RESTORED_FROM_VAULT", resource_type="folder", resource_id=res_id, metadata={"name": folder["name"]})
         return jsonify({"success": True, "message": "Folder restored from Vault"}), 200
 
 

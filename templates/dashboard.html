@@ -37,6 +37,9 @@
         <button class="nav-item" data-view="shares" type="button">
           <span class="nav-icon">&#128279;</span> Shares <span class="nav-count" id="nav-count-shares">0</span>
         </button>
+        <button class="nav-item" data-view="activity" type="button">
+          <span class="nav-icon">&#128339;</span> Activity
+        </button>
         <div class="nav-divider"></div>
         <button class="nav-item vault-nav-item" data-view="vault" type="button" id="vault-nav-btn">
           <span class="nav-icon" id="vault-nav-icon">&#128274;</span>
@@ -336,6 +339,7 @@
     <button class="ctx-item" data-action="download" role="menuitem">&#11015; Download</button>
     <button class="ctx-item" data-action="rename" role="menuitem">&#9998; Rename</button>
     <button class="ctx-item" data-action="share" role="menuitem">&#128279; Share</button>
+    <button class="ctx-item" data-action="history" role="menuitem">&#128339; History</button>
     <button class="ctx-item" data-action="favorite" role="menuitem">&#9733; Favorite</button>
     <button class="ctx-item" data-action="move" role="menuitem">&#128194; Move to Folder</button>
     <hr class="ctx-divider">
@@ -444,6 +448,80 @@
       </div>
       <div id="shares-list" class="shares-list"></div>
     </section>
+  </div>
+
+  <!-- Activity View -->
+  <div class="activity-view" id="activity-view" hidden>
+    <section class="activity-toolbar panel">
+      <div class="activity-toolbar-left">
+        <div class="vault-header-info">
+          <h2 class="vault-header-title">&#128339; Activity</h2>
+          <span class="vault-header-subtitle">Your recent SkySync activity</span>
+        </div>
+      </div>
+      <div class="vault-toolbar-actions">
+        <button class="soft-btn" id="activity-refresh-btn" type="button">Refresh</button>
+      </div>
+    </section>
+    <section class="activity-filters" role="toolbar" aria-label="Activity filters">
+      <button class="activity-filter-btn active" data-filter="all" type="button" role="radio" aria-checked="true">All</button>
+      <button class="activity-filter-btn" data-filter="files" type="button" role="radio" aria-checked="false">Files</button>
+      <button class="activity-filter-btn" data-filter="folders" type="button" role="radio" aria-checked="false">Folders</button>
+      <button class="activity-filter-btn" data-filter="vault" type="button" role="radio" aria-checked="false">Vault</button>
+      <button class="activity-filter-btn" data-filter="shares" type="button" role="radio" aria-checked="false">Shares</button>
+      <button class="activity-filter-btn" data-filter="webdav" type="button" role="radio" aria-checked="false">WebDAV</button>
+    </section>
+    <section class="content-panel panel">
+      <div class="activity-loading" id="activity-loading" role="status" aria-live="polite">
+        <div class="skeleton-timeline">
+          <div class="skeleton skeleton-date"></div>
+          <div class="skeleton skeleton-event"></div>
+          <div class="skeleton skeleton-event"></div>
+          <div class="skeleton skeleton-date"></div>
+          <div class="skeleton skeleton-event"></div>
+        </div>
+      </div>
+      <div class="activity-empty" id="activity-empty" hidden>
+        <div class="empty-icon">&#128339;</div>
+        <h3>No activity yet</h3>
+        <p>Your SkySync activity will appear here.</p>
+        <div class="empty-actions">
+          <button class="primary-btn" id="activity-empty-goto-drive" type="button">Go to My Drive</button>
+        </div>
+      </div>
+      <div class="activity-timeline" id="activity-timeline" role="list" aria-label="Activity timeline"></div>
+      <div class="activity-load-more" id="activity-load-more" hidden>
+        <button class="soft-btn" id="activity-load-more-btn" type="button">Load more</button>
+      </div>
+    </section>
+  </div>
+
+  <!-- Event Details Modal -->
+  <div class="modal-backdrop" id="event-details-modal" hidden role="dialog" aria-modal="true" aria-label="Event details">
+    <div class="modal-card compact-card event-details-card">
+      <div class="modal-heading">
+        <h3 id="event-details-title">Event Details</h3>
+        <p id="event-details-subtitle" class="share-modal-filename"></p>
+      </div>
+      <div id="event-details-body" class="event-details-body"></div>
+      <div class="modal-actions">
+        <button class="soft-btn" data-close-modal="event-details-modal" type="button">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- File/Folder History Modal -->
+  <div class="modal-backdrop" id="history-modal" hidden role="dialog" aria-modal="true" aria-label="File history">
+    <div class="modal-card compact-card history-card">
+      <div class="modal-heading">
+        <h3 id="history-modal-title">File History</h3>
+        <p id="history-modal-filename" class="share-modal-filename"></p>
+      </div>
+      <div id="history-modal-body" class="history-modal-body"></div>
+      <div class="modal-actions">
+        <button class="soft-btn" data-close-modal="history-modal" type="button">Close</button>
+      </div>
+    </div>
   </div>
 
   <div class="toast-stack" id="toast-stack" role="status" aria-live="polite"></div>

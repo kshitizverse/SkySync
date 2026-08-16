@@ -234,6 +234,21 @@ def init_db():
             """
         )
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS activity_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                resource_type TEXT,
+                resource_id INTEGER,
+                metadata TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            """
+        )
+
         for stmt in [
             "CREATE INDEX IF NOT EXISTS idx_files_user ON file_records(user_id)",
             "CREATE INDEX IF NOT EXISTS idx_files_user_msg ON file_records(user_id, telegram_message_id)",
@@ -250,6 +265,9 @@ def init_db():
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_user_id) WHERE telegram_user_id IS NOT NULL",
             "CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone)",
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_vault_settings_user ON vault_settings(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_activity_events_user ON activity_events(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_activity_events_type ON activity_events(event_type)",
+            "CREATE INDEX IF NOT EXISTS idx_activity_events_created ON activity_events(created_at)",
         ]:
             conn.execute(stmt)
 
@@ -1101,3 +1119,107 @@ def get_vault_stats(user_id):
             (user_id,),
         ).fetchone()["cnt"]
         return {"files": file_count, "folders": folder_count}
+
+
+# ---------------------------------------------------------------------------
+# Activity Events (Phase 5A)
+# ---------------------------------------------------------------------------
+
+_VALID_EVENT_TYPES = frozenset({
+    "FILE_UPLOADED",
+    "FILE_DOWNLOADED",
+    "FILE_PREVIEWED",
+    "FILE_RENAMED",
+    "FILE_FAVORITED",
+    "FILE_UNFAVORITED",
+    "FILE_MOVED",
+    "FILE_DELETED",
+    "FILE_RESTORED",
+    "FILE_PERMANENTLY_DELETED",
+    "FOLDER_CREATED",
+    "FOLDER_RENAMED",
+    "FOLDER_MOVED",
+    "FOLDER_DELETED",
+    "FOLDER_RESTORED",
+    "FOLDER_PERMANENTLY_DELETED",
+    "VAULT_UNLOCKED",
+    "VAULT_LOCKED",
+    "FILE_MOVED_TO_VAULT",
+    "FILE_RESTORED_FROM_VAULT",
+    "FOLDER_MOVED_TO_VAULT",
+    "FOLDER_RESTORED_FROM_VAULT",
+    "SHARE_CREATED",
+    "SHARE_ACCESSED",
+    "SHARE_REVOKED",
+    "WEBDAV_UPLOAD",
+    "WEBDAV_DOWNLOAD",
+    "WEBDAV_MOVE",
+    "WEBDAV_DELETE",
+    "WEBDAV_FOLDER_CREATED",
+})
+
+_SENSITIVE_KEYS = frozenset({
+    "password", "password_hash", "pin", "pin_hash", "token",
+    "token_hash", "secret", "api_key", "api_hash", "otp",
+    "code", "session", "session_path", "auth_state",
+    "share_token", "share_password", "share_password_hash",
+})
+
+
+def _sanitize_metadata(metadata):
+    """Remove sensitive keys from metadata dict. Returns JSON string or None."""
+    if not metadata or not isinstance(metadata, dict):
+        return None
+    safe = {}
+    for k, v in metadata.items():
+        kl = k.lower().replace("-", "_").replace(" ", "_")
+        if any(s in kl for s in _SENSITIVE_KEYS):
+            continue
+        if isinstance(v, (str, int, float, bool)):
+            safe[k] = v
+        elif v is None:
+            safe[k] = None
+    if not safe:
+        return None
+    import json as _json
+    try:
+        return _json.dumps(safe, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return None
+
+
+def record_activity(user_id, event_type, resource_type=None, resource_id=None, metadata=None):
+    """Record an activity event. Best-effort — never raises."""
+    if event_type not in _VALID_EVENT_TYPES:
+        return
+    try:
+        now = utcnow_iso()
+        meta_json = _sanitize_metadata(metadata)
+        with get_connection() as conn:
+            conn.execute(
+                """INSERT INTO activity_events
+                   (user_id, event_type, resource_type, resource_id, metadata, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (user_id, event_type, resource_type, resource_id, meta_json, now),
+            )
+    except Exception:
+        pass
+
+
+def get_user_activity(user_id, limit=50, offset=0, event_type=None, resource_type=None):
+    """Retrieve activity events for a user. Returns list of dicts."""
+    limit = min(max(int(limit), 0), 100)
+    offset = max(int(offset), 0)
+    with get_connection() as conn:
+        query = "SELECT * FROM activity_events WHERE user_id = ?"
+        params = [user_id]
+        if event_type:
+            query += " AND event_type = ?"
+            params.append(event_type)
+        if resource_type:
+            query += " AND resource_type = ?"
+            params.append(resource_type)
+        query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        rows = conn.execute(query, params).fetchall()
+        return rows_to_dicts(rows)
