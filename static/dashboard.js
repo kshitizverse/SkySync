@@ -42,8 +42,52 @@ function setupNavigationGuards() {
     var fid = params.get('folder_id');
     state.currentFolderId = fid ? parseInt(fid) : null;
     state.currentPage = 1;
+
+    // Handle view parameter in URL
+    var viewParam = params.get('view');
+    if (viewParam) {
+      // Update currentView based on URL parameter
+      state.currentView = viewParam;
+
+      // Update active sidebar button
+      document.querySelectorAll('.sidebar-nav .nav-item').forEach(b => b.classList.remove('active'));
+      var viewBtn = document.querySelector('.sidebar-nav .nav-item[data-view="' + viewParam + '"]');
+      if (viewBtn) {
+        viewBtn.classList.add('active');
+      }
+
+      // Show the appropriate view
+      showMainViews();
+      if (viewParam === 'files') {
+        document.getElementById('files-view').hidden = false;
+        loadViewData('files');
+      } else if (viewParam === 'settings') {
+        document.getElementById('settings-view').hidden = false;
+        loadSettingsView();
+      } else if (viewParam === 'shares') {
+        document.getElementById('shares-view').hidden = false;
+        loadShares();
+      } else if (viewParam === 'activity') {
+        document.getElementById('activity-view').hidden = false;
+        loadActivity();
+      } else if (viewParam === 'storage-intel') {
+        document.getElementById('storage-intel-view').hidden = false;
+        loadStorageIntelligence();
+      } else if (viewParam === 'vault') {
+        // For vault, we need to call openVault but prevent recursion
+        if (state.currentView !== 'vault') {
+          openVault();
+        }
+      }
+      return; // Skip the rest of the popstate handling
+    }
+
     if (state.currentView === 'files') {
       loadViewData(state.currentView);
+    }
+    // Handle popstate for settings view (fallback for state changes)
+    if (state.currentView === 'settings') {
+      loadSettingsView();
     }
   });
   history.replaceState(null, '', location.pathname);
@@ -152,11 +196,26 @@ function setupEventListeners() {
         closeSidebar();
         return;
       }
+      if (view === 'settings') {
+        state.currentView = 'settings';
+        document.querySelectorAll('.sidebar-nav .nav-item').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        showMainViews();
+        document.getElementById('settings-view').hidden = false;
+        history.pushState({ view: 'settings' }, '', '?view=settings');
+        loadSettingsViewContent();
+        closeSidebar();
+        return;
+      }
       state.currentView = view;
       document.querySelectorAll('.sidebar-nav .nav-item').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       showMainViews();
-      loadViewData(view);
+      if (view === 'settings') {
+        loadSettingsViewContent();
+      } else {
+        loadViewData(view);
+      }
       closeSidebar();
     });
   });
@@ -1124,6 +1183,7 @@ function showMainViews() {
   document.getElementById('vault-lock-screen').hidden = true;
   document.getElementById('activity-view').hidden = true;
   document.getElementById('storage-intel-view').hidden = true;
+  document.getElementById('settings-view').hidden = true;
 }
 
 async function restoreSingleFile(file) {
@@ -2621,6 +2681,7 @@ function hideAllViews() {
   }
   document.getElementById('shares-view').hidden = true;
   document.getElementById('storage-intel-view').hidden = true;
+  document.getElementById('settings-view').hidden = true;
 }
 
 function showVaultLockScreen() {
@@ -2642,6 +2703,226 @@ function showVaultUnlocked() {
   startAutoLockTimer();
 }
 
+function showSettingsView() {
+  hideAllViews();
+  document.getElementById('settings-view').hidden = false;
+  // Update back button in settings toolbar
+  const settingsBackBtn = document.getElementById('settings-back-btn');
+  if (settingsBackBtn) {
+    settingsBackBtn.textContent = '← Back';
+    settingsBackBtn.onclick = () => {
+      navigateToFiles();
+    };
+  }
+  loadSettingsViewContent();
+}
+
+async function loadSettingsViewContent() {
+  try {
+    const status = await fetchJSON('/api/vault/status');
+    // Update global vaultState to keep sidebar in sync
+    vaultState.configured = status.configured;
+    vaultState.unlocked = status.unlocked;
+    updateVaultNav(); // Update sidebar immediately
+
+    const container = document.getElementById('vault-security-content');
+    if (!container) return;
+
+    // Clear existing content
+    container.innerHTML = '';
+
+    if (!status.configured) {
+      // Vault not set up
+      container.innerHTML = `
+        <div class="vault-status-section">
+          <h3>Vault Security</h3>
+          <p>Your Vault is not yet set up. Set up a PIN to protect your private files.</p>
+          <button class="primary-btn" id="setup-vault-pin-btn">
+            Set Up Vault PIN
+          </button>
+        </div>
+      `;
+
+      const setupBtn = container.querySelector('#setup-vault-pin-btn');
+      if (setupBtn) {
+        setupBtn.onclick = async () => {
+          // Show PIN setup dialog
+          const pin1 = await showPrompt('Set Vault PIN', 'Enter a new Vault PIN (6-128 characters)', 'New PIN');
+          if (!pin1) return;
+
+          const pin2 = await showPrompt('Confirm PIN', 'Re-enter your Vault PIN', 'Confirm PIN');
+          if (!pin2) return;
+
+          if (pin1 !== pin2) {
+            showToast('PINs do not match', 'error');
+            return;
+          }
+
+          try {
+            await fetchJSON('/api/vault/pin', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ pin: pin1 })
+            });
+            showToast('Vault PIN set successfully', 'success');
+            // Refresh the view to show updated state
+            loadSettingsViewContent();
+          } catch (error) {
+            showToast(error.message || 'Failed to set PIN', 'error');
+          }
+        };
+      }
+    } else if (status.unlocked) {
+      // Vault is unlocked
+      container.innerHTML = `
+        <div class="vault-status-section">
+          <h3>Vault Security</h3>
+          <p>Your Vault is currently unlocked and ready to use.</p>
+          <div class="vault-actions">
+            <button class="soft-btn" id="change-vault-pin-btn">
+              Change PIN
+            </button>
+            <button class="danger-btn" id="lock-vault-btn">
+              Lock Vault
+            </button>
+          </div>
+        </div>
+      `;
+
+      const changePinBtn = container.querySelector('#change-vault-pin-btn');
+      if (changePinBtn) {
+        changePinBtn.onclick = async () => {
+          // Show change PIN dialog
+          const currentPin = await showPrompt('Current PIN', 'Enter your current Vault PIN', 'Current PIN');
+          if (!currentPin) return;
+
+          const newPin = await showPrompt('New PIN', 'Enter a new Vault PIN (6-128 characters)', 'New PIN');
+          if (!newPin) return;
+
+          const confirmPin = await showPrompt('Confirm PIN', 'Re-enter your new Vault PIN', 'Confirm PIN');
+          if (!confirmPin) return;
+
+          if (newPin !== confirmPin) {
+            showToast('PINs do not match', 'error');
+            return;
+          }
+
+          try {
+            await fetchJSON('/api/vault/pin/change', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ current_pin: currentPin, new_pin: newPin })
+            });
+            showToast('Vault PIN changed successfully', 'success');
+            // Refresh the view
+            loadSettingsViewContent();
+          } catch (error) {
+            showToast(error.message || 'Failed to change PIN', 'error');
+          }
+        };
+      }
+
+      const lockVaultBtn = container.querySelector('#lock-vault-btn');
+      if (lockVaultBtn) {
+        lockVaultBtn.onclick = async () => {
+          const ok = await showConfirm('Lock Vault?', 'This will immediately hide your private files.', 'Lock Vault');
+          if (!ok) return;
+
+          try {
+            await fetchJSON('/api/vault/lock', { method: 'POST' });
+            showToast('Vault locked', 'success');
+            // Refresh the view
+            loadSettingsViewContent();
+          } catch (error) {
+            showToast(error.message || 'Failed to lock Vault', 'error');
+          }
+        };
+      }
+    } else {
+      // Vault is locked but configured
+      container.innerHTML = `
+        <div class="vault-status-section">
+          <h3>Vault Security</h3>
+          <p>Your Vault is configured but currently locked. Enter your PIN to unlock it.</p>
+          <div class="vault-actions">
+            <button class="soft-btn" id="unlock-vault-btn">
+              Unlock Vault
+            </button>
+            <button class="soft-btn" id="change-vault-pin-locked-btn">
+              Change PIN
+            </button>
+          </div>
+        </div>
+      `;
+
+      const unlockVaultBtn = container.querySelector('#unlock-vault-btn');
+      if (unlockVaultBtn) {
+        unlockVaultBtn.onclick = async () => {
+          const pin = await showPrompt('Vault PIN', 'Enter your Vault PIN to unlock', 'PIN');
+          if (!pin) return;
+
+          try {
+            await fetchJSON('/api/vault/unlock', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ pin: pin })
+            });
+            showToast('Vault unlocked successfully', 'success');
+            // Refresh the view
+            loadSettingsViewContent();
+          } catch (error) {
+            showToast(error.message || 'Invalid PIN', 'error');
+          }
+        };
+      }
+
+      const changePinBtn = container.querySelector('#change-vault-pin-locked-btn');
+      if (changePinBtn) {
+        changePinBtn.onclick = async () => {
+          // Show change PIN dialog (requires current PIN)
+          const currentPin = await showPrompt('Current PIN', 'Enter your current Vault PIN', 'Current PIN');
+          if (!currentPin) return;
+
+          const newPin = await showPrompt('New PIN', 'Enter a new Vault PIN (6-128 characters)', 'New PIN');
+          if (!newPin) return;
+
+          const confirmPin = await showPrompt('Confirm PIN', 'Re-enter your new Vault PIN', 'Confirm PIN');
+          if (!confirmPin) return;
+
+          if (newPin !== confirmPin) {
+            showToast('PINs do not match', 'error');
+            return;
+          }
+
+          try {
+            await fetchJSON('/api/vault/pin/change', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ current_pin: currentPin, new_pin: newPin })
+            });
+            showToast('Vault PIN changed successfully', 'success');
+            // Refresh the view
+            loadSettingsViewContent();
+          } catch (error) {
+            showToast(error.message || 'Failed to change PIN', 'error');
+          }
+        };
+      }
+    }
+  } catch (error) {
+    console.error('Failed to load vault status:', error);
+    const container = document.getElementById('vault-security-content');
+    if (container) {
+      container.innerHTML = `
+        <div class="vault-status-section">
+          <h3>Vault Security</h3>
+          <p>Unable to load Vault status. Please try again later.</p>
+        </div>
+      `;
+    }
+  }
+}
+
 function showVaultNotConfigured() {
   document.getElementById('vault-view').hidden = true;
   var lockScreen = document.getElementById('vault-lock-screen');
@@ -2650,7 +2931,27 @@ function showVaultNotConfigured() {
   if (card) {
     card.innerHTML = '<div class="vault-lock-icon">&#128274;</div>' +
       '<h2 class="vault-lock-title">Vault Not Set Up</h2>' +
-      '<p class="vault-lock-desc">Go to Settings to set up your Vault PIN.</p>';
+      '<p class="vault-lock-desc">Set up your Vault PIN to protect your private files.</p>' +
+      '<div class="vault-actions">' +
+      '<button class="primary-btn" id="setup-vault-btn">Set Up Vault</button>' +
+      '<button class="soft-btn" id="vault-back-to-drive-btn">← Back to My Drive</button>' +
+      '</div>';
+  }
+
+  // Add event listeners for the buttons
+  const setupBtn = lockScreen.querySelector('#setup-vault-btn');
+  if (setupBtn) {
+    setupBtn.onclick = () => {
+      // Navigate to Settings view to set up PIN
+      document.querySelector('[data-view="settings"]').click();
+    };
+  }
+
+  const backToDriveBtn = lockScreen.querySelector('#vault-back-to-drive-btn');
+  if (backToDriveBtn) {
+    backToDriveBtn.onclick = () => {
+      navigateToFiles();
+    };
   }
 }
 

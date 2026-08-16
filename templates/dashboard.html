@@ -1,6 +1,5 @@
 <!DOCTYPE html>
 <html lang="en" data-routes='{"files":{{ url_for("get_files")|tojson }},"upload":{{ url_for("upload_file")|tojson }},"profile":{{ url_for("get_profile")|tojson }},"logout":{{ url_for("logout")|tojson }},"fileBase":"/api/files/","shares":{{ url_for("list_shares")|tojson }},"activity":{{ url_for("get_activity")|tojson }},"folders":"/api/folders"}'>
-
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -44,6 +43,9 @@
           <span class="nav-icon">&#128202;</span> Storage
         </button>
         <div class="nav-divider"></div>
+        <button class="nav-item" data-view="settings" type="button">
+          <span class="nav-icon">&#9881;</span> Settings
+        </button>
         <button class="nav-item vault-nav-item" data-view="vault" type="button" id="vault-nav-btn">
           <span class="nav-icon" id="vault-nav-icon">&#128274;</span>
           <span class="vault-nav-label">
@@ -195,471 +197,487 @@
         <div class="files-grid" id="files-grid" role="list" aria-label="Files and folders"></div>
         <div class="pagination" id="pagination" hidden role="navigation" aria-label="Pagination"></div>
       </section>
-    </main>
-  </div>
 
-  <!-- Upload Progress Panel -->
-  <div class="upload-panel" id="upload-panel" hidden role="status" aria-label="Upload progress">
-    <div class="upload-panel-header">
-      <strong>Uploading</strong>
-      <button class="text-btn" id="upload-panel-close" type="button" aria-label="Close upload panel">&times;</button>
-    </div>
-    <div class="upload-list" id="upload-list"></div>
-  </div>
-
-  <!-- Preview Modal -->
-  <div class="modal-backdrop" id="preview-modal" hidden role="dialog" aria-modal="true" aria-label="File preview">
-    <div class="modal-card preview-card">
-      <button class="modal-close" data-close-modal="preview-modal" type="button" aria-label="Close preview">&times;</button>
-      <div id="preview-modal-body"></div>
-    </div>
-  </div>
-
-  <!-- Rename Modal -->
-  <div class="modal-backdrop" id="rename-modal" hidden role="dialog" aria-modal="true" aria-label="Rename file">
-    <div class="modal-card compact-card">
-      <div class="modal-heading">
-        <h3>Rename file</h3>
-        <p>Update the display name stored in SkySync.</p>
-      </div>
-      <form id="rename-form">
-        <input id="rename-input" type="text" maxlength="200" required aria-label="New file name">
-        <div class="modal-actions">
-          <button class="soft-btn" data-close-modal="rename-modal" type="button">Cancel</button>
-          <button class="primary-btn" type="submit">Save name</button>
+      <!-- Upload Progress Panel -->
+      <div class="upload-panel" id="upload-panel" hidden role="status" aria-label="Upload progress">
+        <div class="upload-panel-header">
+          <strong>Uploading</strong>
+          <button class="text-btn" id="upload-panel-close" type="button" aria-label="Close upload panel">&times;</button>
         </div>
-      </form>
-    </div>
-  </div>
-
-  <!-- Share Modal -->
-  <div class="modal-backdrop" id="share-modal" hidden role="dialog" aria-modal="true" aria-label="Share file">
-    <div class="modal-card compact-card">
-      <div class="modal-heading">
-        <h3>&#128279; Share File</h3>
-        <p id="share-modal-filename" class="share-modal-filename"></p>
+        <div class="upload-list" id="upload-list"></div>
       </div>
-      <form id="share-form">
-        <div class="share-section">
-          <div class="share-section-label">Expiration</div>
-          <div class="share-radio-group">
-            <label class="share-radio"><input type="radio" name="share-expiry" value="" checked> Never</label>
-            <label class="share-radio"><input type="radio" name="share-expiry" value="1h"> 1 hour</label>
-            <label class="share-radio"><input type="radio" name="share-expiry" value="1d"> 1 day</label>
-            <label class="share-radio"><input type="radio" name="share-expiry" value="7d"> 7 days</label>
-            <label class="share-radio"><input type="radio" name="share-expiry" value="custom"> Custom</label>
+
+      <!-- Preview Modal -->
+      <div class="modal-backdrop" id="preview-modal" hidden role="dialog" aria-modal="true" aria-label="File preview">
+        <div class="modal-card preview-card">
+          <button class="modal-close" data-close-modal="preview-modal" type="button" aria-label="Close preview">&times;</button>
+          <div id="preview-modal-body"></div>
+        </div>
+      </div>
+
+      <!-- Rename Modal -->
+      <div class="modal-backdrop" id="rename-modal" hidden role="dialog" aria-modal="true" aria-label="Rename file">
+        <div class="modal-card compact-card">
+          <div class="modal-heading">
+            <h3>Rename file</h3>
+            <p>Update the display name stored in SkySync.</p>
+          </div>
+          <form id="rename-form">
+            <input id="rename-input" type="text" maxlength="200" required aria-label="New file name">
+            <div class="modal-actions">
+              <button class="soft-btn" data-close-modal="rename-modal" type="button">Cancel</button>
+              <button class="primary-btn" type="submit">Save name</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Share Modal -->
+      <div class="modal-backdrop" id="share-modal" hidden role="dialog" aria-modal="true" aria-label="Share file">
+        <div class="modal-card compact-card">
+          <div class="modal-heading">
+            <h3>&#128279; Share File</h3>
+            <p id="share-modal-filename" class="share-modal-filename"></p>
+          </div>
+          <form id="share-form">
+            <div class="share-section">
+              <div class="share-section-label">Expiration</div>
+              <div class="share-radio-group">
+                <label class="share-radio"><input type="radio" name="share-expiry" value="" checked> Never</label>
+                <label class="share-radio"><input type="radio" name="share-expiry" value="1h"> 1 hour</label>
+                <label class="share-radio"><input type="radio" name="share-expiry" value="1d"> 1 day</label>
+                <label class="share-radio"><input type="radio" name="share-expiry" value="7d"> 7 days</label>
+                <label class="share-radio"><input type="radio" name="share-expiry" value="custom"> Custom</label>
+              </div>
+            </div>
+            <div class="form-group" id="share-custom-expiry-group" hidden>
+              <label>Custom Expiration</label>
+              <input type="datetime-local" id="share-custom-expiry" aria-label="Custom expiration date">
+            </div>
+            <div class="share-divider"></div>
+            <div class="share-section">
+              <div class="share-section-label">Security</div>
+              <div class="share-check-group">
+                <label class="checkbox-label">
+                  <input type="checkbox" id="share-can-download" checked> Allow download
+                </label>
+                <label class="checkbox-label">
+                  <input type="checkbox" id="share-require-password"> Require password
+                </label>
+                <label class="checkbox-label">
+                  <input type="checkbox" id="share-one-time"> One-time link
+                </label>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Download limit</label>
+              <select id="share-download-limit" aria-label="Download limit">
+                <option value="">No limit</option>
+                <option value="1">1 download</option>
+                <option value="3">3 downloads</option>
+                <option value="5">5 downloads</option>
+                <option value="10">10 downloads</option>
+                <option value="25">25 downloads</option>
+                <option value="50">50 downloads</option>
+                <option value="100">100 downloads</option>
+              </select>
+            </div>
+            <div class="share-result" id="share-result" hidden>
+              <div class="share-result-header">Share link created</div>
+              <div class="share-result-url">
+                <input type="text" id="share-url-input" readonly aria-label="Share URL">
+                <button type="button" class="primary-btn" id="copy-share-btn">Copy</button>
+              </div>
+              <div class="share-result-meta" id="share-result-meta"></div>
+            </div>
+            <div class="modal-actions">
+              <button class="soft-btn" data-close-modal="share-modal" type="button">Cancel</button>
+              <button class="primary-btn" type="submit" id="create-share-btn">Create Secure Link</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Name Modal -->
+      <div class="modal-backdrop" id="name-modal" hidden role="dialog" aria-modal="true" aria-label="Set display name">
+        <div class="modal-card compact-card">
+          <div class="modal-heading">
+            <h3>Welcome to SkySync</h3>
+            <p>Set a display name so your profile is easy to recognize.</p>
+          </div>
+          <form id="name-form" novalidate>
+            <input id="name-input" type="text" maxlength="80" placeholder="Your name" required autocomplete="name" aria-label="Your name">
+            <div class="modal-actions">
+              <button class="primary-btn" type="submit" id="name-save-btn">Save</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Edit Name Modal -->
+      <div class="modal-backdrop" id="edit-name-modal" hidden role="dialog" aria-modal="true" aria-label="Edit profile">
+        <div class="modal-card compact-card">
+          <div class="modal-heading">
+            <h3>Edit profile</h3>
+            <p>Update your display name.</p>
+          </div>
+          <form id="edit-name-form" novalidate>
+            <input id="edit-name-input" type="text" maxlength="80" placeholder="Your name" required autocomplete="name" aria-label="Display name">
+            <div class="modal-actions">
+              <button class="soft-btn" data-close-modal="edit-name-modal" type="button">Cancel</button>
+              <button class="primary-btn" type="submit" id="edit-name-save-btn">Save</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Context Menu -->
+      <div class="context-menu" id="context-menu" role="menu" aria-label="File actions">
+        <button class="ctx-item" data-action="preview" role="menuitem">&#128269; Preview</button>
+        <button class="ctx-item" data-action="download" role="menuitem">&#11015; Download</button>
+        <button class="ctx-item" data-action="rename" role="menuitem">&#9998; Rename</button>
+        <button class="ctx-item" data-action="share" role="menuitem">&#128279; Share</button>
+        <button class="ctx-item" data-action="history" role="menuitem">&#128339; History</button>
+        <button class="ctx-item" data-action="favorite" role="menuitem">&#9733; Favorite</button>
+        <button class="ctx-item" data-action="move" role="menuitem">&#128194; Move to Folder</button>
+        <hr class="ctx-divider">
+        <button class="ctx-item" data-action="vault-move" role="menuitem">&#128274; Move to Vault</button>
+        <button class="ctx-item" data-action="vault-restore" role="menuitem" hidden>&#128275; Restore from Vault</button>
+        <hr class="ctx-divider">
+        <button class="ctx-item danger" data-action="delete" role="menuitem">&#128465; Delete</button>
+      </div>
+
+      <!-- Move to Folder Modal -->
+      <div class="modal-backdrop" id="modal-move" hidden role="dialog" aria-modal="true" aria-label="Move file to folder">
+        <div class="modal-card compact-card">
+          <div class="modal-heading">
+            <h3>Move to Folder</h3>
+            <p>Select a destination folder.</p>
+          </div>
+          <div id="move-folder-list" class="move-folder-list">
+            <button class="move-folder-item active" data-folder-id="null" role="option" aria-selected="true">&#127968; Root</button>
+          </div>
+          <div class="modal-actions">
+            <button class="soft-btn" id="move-cancel-btn" type="button">Cancel</button>
+            <button class="primary-btn" id="move-confirm-btn" type="button">Move</button>
           </div>
         </div>
-        <div class="form-group" id="share-custom-expiry-group" hidden>
-          <label>Custom Expiration</label>
-          <input type="datetime-local" id="share-custom-expiry" aria-label="Custom expiration date">
-        </div>
-        <div class="share-divider"></div>
-        <div class="share-section">
-          <div class="share-section-label">Security</div>
-          <div class="share-check-group">
-            <label class="checkbox-label">
-              <input type="checkbox" id="share-can-download" checked> Allow download
-            </label>
-            <label class="checkbox-label">
-              <input type="checkbox" id="share-require-password"> Require password
-            </label>
-            <label class="checkbox-label">
-              <input type="checkbox" id="share-one-time"> One-time link
-            </label>
-          </div>
-        </div>
-        <div class="form-group" id="share-password-group" hidden>
-          <label>Password</label>
-          <input type="password" id="share-password" placeholder="Enter password" maxlength="128" autocomplete="off" aria-label="Share password">
-        </div>
-        <div class="share-divider"></div>
-        <div class="form-group">
-          <label>Download limit</label>
-          <select id="share-download-limit" aria-label="Download limit">
-            <option value="">No limit</option>
-            <option value="1">1 download</option>
-            <option value="3">3 downloads</option>
-            <option value="5">5 downloads</option>
-            <option value="10">10 downloads</option>
-            <option value="25">25 downloads</option>
-            <option value="50">50 downloads</option>
-            <option value="100">100 downloads</option>
-          </select>
-        </div>
-        <div class="share-result" id="share-result" hidden>
-          <div class="share-result-header">Share link created</div>
-          <div class="share-result-url">
-            <input type="text" id="share-url-input" readonly aria-label="Share URL">
-            <button type="button" class="primary-btn" id="copy-share-btn">Copy</button>
-          </div>
-          <div class="share-result-meta" id="share-result-meta"></div>
-        </div>
-        <div class="modal-actions">
-          <button class="soft-btn" data-close-modal="share-modal" type="button">Cancel</button>
-          <button class="primary-btn" type="submit" id="create-share-btn">Create Secure Link</button>
-        </div>
-      </form>
-    </div>
-  </div>
+      </div>
 
-  <!-- Name Modal -->
-  <div class="modal-backdrop" id="name-modal" hidden role="dialog" aria-modal="true" aria-label="Set display name">
-    <div class="modal-card compact-card">
-      <div class="modal-heading">
-        <h3>Welcome to SkySync</h3>
-        <p>Set a display name so your profile is easy to recognize.</p>
-      </div>
-      <form id="name-form" novalidate>
-        <input id="name-input" type="text" maxlength="80" placeholder="Your name" required autocomplete="name" aria-label="Your name">
-        <div class="modal-actions">
-          <button class="primary-btn" type="submit" id="name-save-btn">Save name</button>
-        </div>
-      </form>
-    </div>
-  </div>
-
-  <!-- Edit Name Modal -->
-  <div class="modal-backdrop" id="edit-name-modal" hidden role="dialog" aria-modal="true" aria-label="Edit profile">
-    <div class="modal-card compact-card">
-      <div class="modal-heading">
-        <h3>Edit profile</h3>
-        <p>Update your display name.</p>
-      </div>
-      <form id="edit-name-form" novalidate>
-        <input id="edit-name-input" type="text" maxlength="80" placeholder="Your name" required autocomplete="name" aria-label="Display name">
-        <div class="modal-actions">
-          <button class="soft-btn" data-close-modal="edit-name-modal" type="button">Cancel</button>
-          <button class="primary-btn" type="submit" id="edit-name-save-btn">Save</button>
-        </div>
-      </form>
-    </div>
-  </div>
-
-  <!-- Context Menu -->
-  <div class="context-menu" id="context-menu" role="menu" aria-label="File actions">
-    <button class="ctx-item" data-action="preview" role="menuitem">&#128269; Preview</button>
-    <button class="ctx-item" data-action="download" role="menuitem">&#11015; Download</button>
-    <button class="ctx-item" data-action="rename" role="menuitem">&#9998; Rename</button>
-    <button class="ctx-item" data-action="share" role="menuitem">&#128279; Share</button>
-    <button class="ctx-item" data-action="history" role="menuitem">&#128339; History</button>
-    <button class="ctx-item" data-action="favorite" role="menuitem">&#9733; Favorite</button>
-    <button class="ctx-item" data-action="move" role="menuitem">&#128194; Move to Folder</button>
-    <hr class="ctx-divider">
-    <button class="ctx-item" data-action="vault-move" role="menuitem">&#128274; Move to Vault</button>
-    <button class="ctx-item" data-action="vault-restore" role="menuitem" hidden>&#128275; Restore from Vault</button>
-    <hr class="ctx-divider">
-    <button class="ctx-item danger" data-action="delete" role="menuitem">&#128465; Delete</button>
-  </div>
-
-  <!-- Move to Folder Modal -->
-  <div class="modal-backdrop" id="modal-move" hidden role="dialog" aria-modal="true" aria-label="Move file to folder">
-    <div class="modal-card compact-card">
-      <div class="modal-heading">
-        <h3>Move to Folder</h3>
-        <p>Select a destination folder.</p>
-      </div>
-      <div id="move-folder-list" class="move-folder-list">
-        <button class="move-folder-item active" data-folder-id="null" role="option" aria-selected="true">&#127968; Root</button>
-      </div>
-      <div class="modal-actions">
-        <button class="soft-btn" id="move-cancel-btn" type="button">Cancel</button>
-        <button class="primary-btn" id="move-confirm-btn" type="button">Move</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Vault Lock Screen -->
-  <div class="vault-lock-screen" id="vault-lock-screen" hidden role="dialog" aria-modal="true" aria-label="Vault locked">
-    <div class="vault-lock-card">
-      <div class="vault-lock-icon">&#128274;</div>
-      <h2 class="vault-lock-title">Vault Locked</h2>
-      <p class="vault-lock-desc">Your private files are protected.</p>
-      <form id="vault-pin-form" novalidate>
-        <label class="vault-pin-label" for="vault-pin-input">Vault PIN</label>
-        <input type="password" id="vault-pin-input" class="vault-pin-input" maxlength="128" autocomplete="off" inputmode="numeric" placeholder="Enter your PIN" aria-label="Vault PIN" required>
-        <div class="vault-pin-error" id="vault-pin-error" role="alert" hidden>Invalid Vault PIN</div>
-        <button type="submit" class="primary-btn vault-unlock-btn" id="vault-unlock-btn">Unlock</button>
-      </form>
-    </div>
-  </div>
-
-  <!-- Vault Unlocked View -->
-  <div class="vault-view" id="vault-view" hidden>
-    <section class="vault-toolbar panel">
-      <div class="vault-toolbar-left">
-        <div class="vault-header-info">
-          <h2 class="vault-header-title">&#128274; Vault</h2>
-          <span class="vault-header-subtitle" id="vault-header-subtitle">Private files</span>
-        </div>
-        <div class="vault-autolock-indicator" id="vault-autolock-indicator">
-          <span class="autolock-label">Auto-lock in</span>
-          <span class="autolock-timer" id="vault-autolock-timer">05:00</span>
+      <!-- Vault Lock Screen -->
+      <div class="vault-lock-screen" id="vault-lock-screen" hidden role="dialog" aria-modal="true" aria-label="Vault locked">
+        <div class="vault-lock-card">
+          <div class="vault-lock-icon">&#128274;</div>
+          <h2 class="vault-lock-title">Vault Locked</h2>
+          <p class="vault-lock-desc">Your private files are protected.</p>
+          <form id="vault-pin-form" novalidate>
+            <label class="vault-pin-label" for="vault-pin-input">Vault PIN</label>
+            <input type="password" id="vault-pin-input" class="vault-pin-input" maxlength="128" autocomplete="off" inputmode="numeric" placeholder="Enter your PIN" aria-label="Vault PIN" required>
+            <div class="vault-pin-error" id="vault-pin-error" role="alert" hidden>Invalid Vault PIN</div>
+            <button type="submit" class="primary-btn vault-unlock-btn" id="vault-unlock-btn">Unlock</button>
+          </form>
         </div>
       </div>
-      <div class="vault-toolbar-actions">
-        <button class="soft-btn" id="vault-upload-btn" type="button">Upload</button>
-        <button class="soft-btn" id="vault-new-folder-btn" type="button">+ Folder</button>
-        <button class="soft-btn danger-btn" id="vault-lock-btn" type="button">&#128274; Lock Vault</button>
-      </div>
-    </section>
-    <section class="status-strip" id="vault-status-strip">
-      <div>
-        <strong id="vault-section-title">Vault</strong>
-        <span id="vault-section-subtitle">Private files</span>
-      </div>
-    </section>
-    <section class="content-panel panel">
-      <div class="vault-breadcrumb" id="vault-breadcrumb" role="navigation" aria-label="Vault folder navigation"></div>
-      <div class="empty-state" id="vault-empty-state" hidden>
-        <div class="empty-icon">&#128274;</div>
-        <h3>Your Vault is empty</h3>
-        <p>Move private files here to keep them away from your normal Drive.</p>
-        <div class="empty-actions">
-          <button class="primary-btn" id="vault-empty-goto-drive" type="button">Go to My Drive</button>
-        </div>
-      </div>
-      <div class="files-grid" id="vault-files-grid" role="list" aria-label="Vault files and folders"></div>
-    </section>
-    <input type="file" id="vault-file-input" multiple hidden aria-hidden="true">
-  </div>
 
-  <!-- Download indicator -->
-  <div class="download-indicator" id="download-indicator" hidden role="status" aria-label="Download progress">
-    <div class="spinner"></div>
-    <div class="download-indicator-text" id="download-indicator-text">Preparing file...</div>
-  </div>
-
-  <!-- Active Shares View -->
-  <div class="shares-view" id="shares-view" hidden>
-    <section class="shares-toolbar panel">
-      <div class="vault-toolbar-left">
-        <div class="vault-header-info">
-          <h2 class="vault-header-title">&#128279; Active Shares</h2>
-          <span class="vault-header-subtitle" id="shares-header-subtitle">Loading...</span>
-        </div>
-      </div>
-      <div class="vault-toolbar-actions">
-        <button class="soft-btn" id="shares-refresh-btn" type="button">Refresh</button>
-      </div>
-    </section>
-    <section class="content-panel panel">
-      <div class="empty-state" id="shares-empty-state" hidden>
-        <div class="empty-icon">&#128279;</div>
-        <h3>No active shares</h3>
-        <p>Share files from the All Files view to see them here.</p>
-      </div>
-      <div id="shares-list" class="shares-list"></div>
-    </section>
-  </div>
-
-  <!-- Activity View -->
-  <div class="activity-view" id="activity-view" hidden>
-    <section class="activity-toolbar panel">
-      <div class="activity-toolbar-left">
-        <div class="vault-header-info">
-          <h2 class="vault-header-title">&#128339; Activity</h2>
-          <span class="vault-header-subtitle">Your recent SkySync activity</span>
-        </div>
-      </div>
-      <div class="vault-toolbar-actions">
-        <button class="soft-btn" id="activity-refresh-btn" type="button">Refresh</button>
-      </div>
-    </section>
-    <section class="activity-filters" role="toolbar" aria-label="Activity filters">
-      <button class="activity-filter-btn active" data-filter="all" type="button" role="radio" aria-checked="true">All</button>
-      <button class="activity-filter-btn" data-filter="files" type="button" role="radio" aria-checked="false">Files</button>
-      <button class="activity-filter-btn" data-filter="folders" type="button" role="radio" aria-checked="false">Folders</button>
-      <button class="activity-filter-btn" data-filter="vault" type="button" role="radio" aria-checked="false">Vault</button>
-      <button class="activity-filter-btn" data-filter="shares" type="button" role="radio" aria-checked="false">Shares</button>
-      <button class="activity-filter-btn" data-filter="webdav" type="button" role="radio" aria-checked="false">WebDAV</button>
-    </section>
-    <section class="content-panel panel">
-      <div class="activity-loading" id="activity-loading" role="status" aria-live="polite">
-        <div class="skeleton-timeline">
-          <div class="skeleton skeleton-date"></div>
-          <div class="skeleton skeleton-event"></div>
-          <div class="skeleton skeleton-event"></div>
-          <div class="skeleton skeleton-date"></div>
-          <div class="skeleton skeleton-event"></div>
-        </div>
-      </div>
-      <div class="activity-empty" id="activity-empty" hidden>
-        <div class="empty-icon">&#128339;</div>
-        <h3>No activity yet</h3>
-        <p>Your SkySync activity will appear here.</p>
-        <div class="empty-actions">
-          <button class="primary-btn" id="activity-empty-goto-drive" type="button">Go to My Drive</button>
-        </div>
-      </div>
-      <div class="activity-timeline" id="activity-timeline" role="list" aria-label="Activity timeline"></div>
-      <div class="activity-load-more" id="activity-load-more" hidden>
-        <button class="soft-btn" id="activity-load-more-btn" type="button">Load more</button>
-      </div>
-    </section>
-  </div>
-
-  <!-- Storage Intelligence View -->
-  <div class="storage-intel-view" id="storage-intel-view" hidden>
-    <section class="si-toolbar panel">
-      <div class="si-toolbar-left">
-        <div class="vault-header-info">
-          <h2 class="vault-header-title">&#128202; Storage Intelligence</h2>
-          <span class="vault-header-subtitle">Overview of your SkySync storage</span>
-        </div>
-      </div>
-      <div class="vault-toolbar-actions">
-        <button class="soft-btn" id="si-refresh-btn" type="button">Refresh</button>
-      </div>
-    </section>
-
-    <!-- Loading Skeleton -->
-    <div class="si-loading" id="si-loading" role="status" aria-live="polite">
-      <div class="si-skeleton-hero skeleton"></div>
-      <div class="si-skeleton-grid">
-        <div class="si-skeleton-card skeleton"></div>
-        <div class="si-skeleton-card skeleton"></div>
-        <div class="si-skeleton-card skeleton"></div>
-        <div class="si-skeleton-card skeleton"></div>
-        <div class="si-skeleton-card skeleton"></div>
-        <div class="si-skeleton-card skeleton"></div>
-      </div>
-      <div class="si-skeleton-row">
-        <div class="si-skeleton-list skeleton"></div>
-        <div class="si-skeleton-list skeleton"></div>
-      </div>
-    </div>
-
-    <!-- Error State -->
-    <div class="si-error" id="si-error" hidden role="alert">
-      <div class="empty-icon">&#9888;</div>
-      <h3>Unable to load storage insights</h3>
-      <p>Something went wrong while fetching your storage data.</p>
-      <div class="empty-actions">
-        <button class="primary-btn" id="si-retry-btn" type="button">Try Again</button>
-      </div>
-    </div>
-
-    <!-- Empty State -->
-    <div class="si-empty" id="si-empty" hidden>
-      <div class="empty-icon">&#128202;</div>
-      <h3>No storage data yet</h3>
-      <p>Upload your first file to start seeing storage insights.</p>
-      <div class="empty-actions">
-        <button class="primary-btn" id="si-empty-upload-btn" type="button">Upload File</button>
-      </div>
-    </div>
-
-    <!-- Content -->
-    <div class="si-content" id="si-content" hidden>
-      <!-- Hero Card -->
-      <div class="si-hero panel" id="si-hero">
-        <div class="si-hero-left">
-          <div class="si-hero-label">Your Sky</div>
-          <div class="si-hero-size" id="si-hero-size">0 B</div>
-          <div class="si-hero-meta">
-            <span id="si-hero-files">0 files</span>
-            <span class="si-hero-dot"></span>
-            <span id="si-hero-folders">0 folders</span>
-          </div>
-          <div class="si-hero-bar">
-            <div class="si-hero-bar-track">
-              <div class="si-hero-bar-fill" id="si-hero-bar-fill"></div>
+      <!-- Vault Unlocked View -->
+      <div class="vault-view" id="vault-view" hidden>
+        <section class="vault-toolbar panel">
+          <div class="vault-toolbar-left">
+            <div class="vault-header-info">
+              <h2 class="vault-header-title">&#128274; Vault</h2>
+              <span class="vault-header-subtitle" id="vault-header-subtitle">Private files</span>
+            </div>
+            <div class="vault-autolock-indicator" id="vault-autolock-indicator">
+              <span class="autolock-label">Auto-lock in</span>
+              <span class="autolock-timer" id="vault-autolock-timer">05:00</span>
             </div>
           </div>
+          <div class="vault-toolbar-actions">
+            <button class="soft-btn" id="vault-upload-btn" type="button">Upload</button>
+            <button class="soft-btn" id="vault-new-folder-btn" type="button">+ Folder</button>
+            <button class="soft-btn danger-btn" id="vault-lock-btn" type="button">&#128274; Lock Vault</button>
+          </div>
+        </section>
+        <section class="status-strip" id="vault-status-strip">
+          <div>
+            <strong id="vault-section-title">Vault</strong>
+            <span id="vault-section-subtitle">Private files</span>
+          </div>
+        </section>
+        <section class="content-panel panel">
+          <div class="vault-breadcrumb" id="vault-breadcrumb" role="navigation" aria-label="Vault folder navigation"></div>
+          <div class="empty-state" id="vault-empty-state" hidden>
+            <div class="empty-icon">&#128274;</div>
+            <h3>Your Vault is empty</h3>
+            <p>Move private files here to keep them away from your normal Drive.</p>
+            <div class="empty-actions">
+              <button class="primary-btn" id="vault-empty-goto-drive" type="button">Go to My Drive</button>
+            </div>
+          </div>
+          <div class="files-grid" id="vault-files-grid" role="list" aria-label="Vault files and folders"></div>
+        </section>
+        <input type="file" id="vault-file-input" multiple hidden aria-hidden="true">
+      </div>
+
+      <!-- Download indicator -->
+      <div class="download-indicator" id="download-indicator" hidden role="status" aria-label="Download progress">
+        <div class="spinner"></div>
+        <div class="download-indicator-text" id="download-indicator-text">Preparing file...</div>
+      </div>
+
+      <!-- Active Shares View -->
+      <div class="shares-view" id="shares-view" hidden>
+        <section class="shares-toolbar panel">
+          <div class="vault-toolbar-left">
+            <div class="vault-header-info">
+              <h2 class="vault-header-title">&#128279; Active Shares</h2>
+              <span class="vault-header-subtitle" id="shares-header-subtitle">Loading...</span>
+            </div>
+          </div>
+          <div class="vault-toolbar-actions">
+            <button class="soft-btn" id="shares-refresh-btn" type="button">Refresh</button>
+          </div>
+        </section>
+        <section class="content-panel panel">
+          <div class="empty-state" id="shares-empty-state" hidden>
+            <div class="empty-icon">&#128279;</div>
+            <h3>No active shares</h3>
+            <p>Share files from the All Files view to see them here.</p>
+          </div>
+          <div id="shares-list" class="shares-list"></div>
+        </section>
+      </div>
+
+      <!-- Activity View -->
+      <div class="activity-view" id="activity-view" hidden>
+        <section class="activity-toolbar panel">
+          <div class="activity-toolbar-left">
+            <div class="vault-header-info">
+              <h2 class="vault-header-title">&#128339; Activity</h2>
+              <span class="vault-header-subtitle">Your recent SkySync activity</span>
+            </div>
+          </div>
+          <div class="vault-toolbar-actions">
+            <button class="soft-btn" id="activity-refresh-btn" type="button">Refresh</button>
+          </div>
+        </section>
+        <section class="activity-filters" role="toolbar" aria-label="Activity filters">
+          <button class="activity-filter-btn active" data-filter="all" type="button" role="radio" aria-checked="true">All</button>
+          <button class="activity-filter-btn" data-filter="files" type="button" role="radio" aria-checked="false">Files</button>
+          <button class="activity-filter-btn" data-filter="folders" type="button" role="radio" aria-checked="false">Folders</button>
+          <button class="activity-filter-btn" data-filter="vault" type="button" role="radio" aria-checked="false">Vault</button>
+          <button class="activity-filter-btn" data-filter="shares" type="button" role="radio" aria-checked="false">Shares</button>
+          <button class="activity-filter-btn" data-filter="webdav" type="button" role="radio" aria-checked="false">WebDAV</button>
+        </section>
+        <section class="content-panel panel">
+          <div class="activity-loading" id="activity-loading" role="status" aria-live="polite">
+            <div class="skeleton-timeline">
+              <div class="skeleton skeleton-date"></div>
+              <div class="skeleton skeleton-event"></div>
+              <div class="skeleton skeleton-event"></div>
+              <div class="skeleton skeleton-date"></div>
+              <div class="skeleton skeleton-event"></div>
+            </div>
+          </div>
+          <div class="activity-empty" id="activity-empty" hidden>
+            <div class="empty-icon">&#128339;</div>
+            <h3>No activity yet</h3>
+            <p>Your SkySync activity will appear here.</p>
+            <div class="empty-actions">
+              <button class="primary-btn" id="activity-empty-goto-drive" type="button">Go to My Drive</button>
+            </div>
+          </div>
+          <div class="activity-timeline" id="activity-timeline" role="list" aria-label="Activity timeline"></div>
+          <div class="activity-load-more" id="activity-load-more" hidden>
+            <button class="soft-btn" id="activity-load-more-btn" type="button">Load more</button>
+          </div>
+        </section>
+      </div>
+
+      <!-- Storage Intelligence View -->
+      <div class="storage-intel-view" id="storage-intel-view" hidden>
+        <section class="si-toolbar panel">
+          <div class="si-toolbar-left">
+            <div class="vault-header-info">
+              <h2 class="vault-header-title">&#128202; Storage Intelligence</h2>
+              <span class="vault-header-subtitle">Overview of your SkySync storage</span>
+            </div>
+          </div>
+          <div class="vault-toolbar-actions">
+            <button class="soft-btn" id="si-refresh-btn" type="button">Refresh</button>
+          </div>
+        </section>
+
+        <!-- Loading Skeleton -->
+        <div class="si-loading" id="si-loading" role="status" aria-live="polite">
+          <div class="si-skeleton-hero skeleton"></div>
+          <div class="si-skeleton-grid">
+            <div class="si-skeleton-card skeleton"></div>
+            <div class="si-skeleton-card skeleton"></div>
+            <div class="si-skeleton-card skeleton"></div>
+            <div class="si-skeleton-card skeleton"></div>
+            <div class="si-skeleton-card skeleton"></div>
+            <div class="si-skeleton-card skeleton"></div>
+          </div>
+          <div class="si-skeleton-row">
+            <div class="si-skeleton-list skeleton"></div>
+            <div class="si-skeleton-list skeleton"></div>
+          </div>
         </div>
-        <div class="si-hero-chart" id="si-hero-chart" role="img" aria-label="Storage distribution chart"></div>
-      </div>
 
-      <!-- Breakdown Section -->
-      <div class="si-section-label">Storage Breakdown</div>
-      <div class="si-breakdown" id="si-breakdown" role="list" aria-label="File type breakdown"></div>
-
-      <!-- Two-column: Largest + Recent -->
-      <div class="si-two-col">
-        <div class="si-col">
-          <div class="si-section-label">Largest Files</div>
-          <div class="si-file-list panel" id="si-largest-files" role="list" aria-label="Largest files"></div>
+        <!-- Error State -->
+        <div class="si-error" id="si-error" hidden role="alert">
+          <div class="empty-icon">&#9888;</div>
+          <h3>Unable to load storage insights</h3>
+          <p>Something went wrong while fetching your storage data.</p>
+          <div class="empty-actions">
+            <button class="primary-btn" id="si-retry-btn" type="button">Try Again</button>
+          </div>
         </div>
-        <div class="si-col">
-          <div class="si-section-label">Recently Added</div>
-          <div class="si-file-list panel" id="si-recent-files" role="list" aria-label="Recently added files"></div>
+
+        <!-- Empty State -->
+        <div class="si-empty" id="si-empty" hidden>
+          <div class="empty-icon">&#128202;</div>
+          <h3>No storage data yet</h3>
+          <p>Upload your first file to start seeing storage insights.</p>
+          <div class="empty-actions">
+            <button class="primary-btn" id="si-empty-upload-btn" type="button">Upload File</button>
+          </div>
+        </div>
+
+        <!-- Content -->
+        <div class="si-content" id="si-content" hidden>
+          <!-- Hero Card -->
+          <div class="si-hero panel" id="si-hero">
+            <div class="si-hero-left">
+              <div class="si-hero-label">Your Sky</div>
+              <div class="si-hero-size" id="si-hero-size">0 B</div>
+              <div class="si-hero-meta">
+                <span id="si-hero-files">0 files</span>
+                <span class="si-hero-dot"></span>
+                <span id="si-hero-folders">0 folders</span>
+              </div>
+              <div class="si-hero-bar">
+                <div class="si-hero-bar-track">
+                  <div class="si-hero-bar-fill" id="si-hero-bar-fill"></div>
+                </div>
+              </div>
+            </div>
+            <div class="si-hero-chart" id="si-hero-chart" role="img" aria-label="Storage distribution chart"></div>
+          </div>
+
+          <!-- Breakdown Section -->
+          <div class="si-section-label">Storage Breakdown</div>
+          <div class="si-breakdown" id="si-breakdown" role="list" aria-label="File type breakdown"></div>
+
+          <!-- Two-column: Largest + Recent -->
+          <div class="si-two-col">
+            <div class="si-col">
+              <div class="si-section-label">Largest Files</div>
+              <div class="si-file-list panel" id="si-largest-files" role="list" aria-label="Largest files"></div>
+            </div>
+            <div class="si-col">
+              <div class="si-section-label">Recently Added</div>
+              <div class="si-file-list panel" id="si-recent-files" role="list" aria-label="Recently added files"></div>
+            </div>
+          </div>
+
+          <!-- Folder Overview -->
+          <div class="si-section-label">Folder Overview</div>
+          <div class="si-folder-overview panel" id="si-folder-overview">
+            <div class="si-folder-count" id="si-folder-count">0 folders</div>
+            <button class="soft-btn" id="si-goto-drive-btn" type="button">Open My Drive</button>
+          </div>
         </div>
       </div>
 
-      <!-- Folder Overview -->
-      <div class="si-section-label">Folder Overview</div>
-      <div class="si-folder-overview panel" id="si-folder-overview">
-        <div class="si-folder-count" id="si-folder-count">0 folders</div>
-        <button class="soft-btn" id="si-goto-drive-btn" type="button">Open My Drive</button>
+      <!-- Settings View -->
+      <div class="settings-view" id="settings-view" hidden>
+        <section class="settings-toolbar panel">
+          <div class="settings-toolbar-left">
+            <div class="vault-header-info">
+              <h2 class="vault-header-title">&#9881; Settings</h2>
+              <span class="vault-header-subtitle">Manage your SkySync preferences</span>
+            </div>
+          </div>
+          <div class="vault-toolbar-actions">
+            <button class="soft-btn" id="settings-back-btn" type="button">Back</button>
+          </div>
+        </section>
+        <section class="content-panel panel">
+          <div class="settings-section">
+            <div class="settings-section-title">Vault Security</div>
+            <div class="settings-section-content" id="vault-security-content">
+              <!-- Vault Security content will be loaded dynamically -->
+            </div>
+          </div>
+        </section>
       </div>
-    </div>
-  </div>
 
-  <!-- Event Details Modal -->
-  <div class="modal-backdrop" id="event-details-modal" hidden role="dialog" aria-modal="true" aria-label="Event details">
-    <div class="modal-card compact-card event-details-card">
-      <div class="modal-heading">
-        <h3 id="event-details-title">Event Details</h3>
-        <p id="event-details-subtitle" class="share-modal-filename"></p>
-      </div>
-      <div id="event-details-body" class="event-details-body"></div>
-      <div class="modal-actions">
-        <button class="soft-btn" data-close-modal="event-details-modal" type="button">Close</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- File/Folder History Modal -->
-  <div class="modal-backdrop" id="history-modal" hidden role="dialog" aria-modal="true" aria-label="File history">
-    <div class="modal-card compact-card history-card">
-      <div class="modal-heading">
-        <h3 id="history-modal-title">File History</h3>
-        <p id="history-modal-filename" class="share-modal-filename"></p>
-      </div>
-      <div id="history-modal-body" class="history-modal-body"></div>
-      <div class="modal-actions">
-        <button class="soft-btn" data-close-modal="history-modal" type="button">Close</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="toast-stack" id="toast-stack" role="status" aria-live="polite"></div>
-
-  <!-- WebDAV Settings Modal -->
-  <div class="modal-backdrop" id="webdav-modal" hidden role="dialog" aria-modal="true" aria-label="WebDAV Settings">
-    <div class="modal-card compact-card">
-      <div class="modal-heading">
-        <h3>WebDAV Access</h3>
-        <p>Connect to SkySync via WebDAV from Windows Explorer or any WebDAV client.</p>
-      </div>
-      <div id="webdav-token-list" class="webdav-token-list">
-        <p>Generating token list...</p>
-      </div>
-      <div class="modal-actions">
-        <button class="soft-btn" data-close-modal="webdav-modal" type="button">Close</button>
-        <button class="primary-btn" id="webdav-create-btn" type="button">Generate New Token</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="modal-backdrop" id="webdav-create-modal" hidden role="dialog" aria-modal="true" aria-label="Create WebDAV Token">
-    <div class="modal-card compact-card">
-      <div class="modal-heading">
-        <h3>Create WebDAV Token</h3>
-        <p>Generate a new WebDAV access token.</p>
-      </div>
-      <form id="webdav-create-form" novalidate>
-        <input id="webdav-token-label" type="text" maxlength="100" placeholder="Token label (e.g. 'Home PC')" aria-label="Token label">
-        <div class="modal-actions">
-          <button class="soft-btn" data-close-modal="webdav-create-modal" type="button">Cancel</button>
-          <button class="primary-btn" type="submit" id="webdav-create-save">Create</button>
+      <!-- Event Details Modal -->
+      <div class="modal-backdrop" id="event-details-modal" hidden role="dialog" aria-modal="true" aria-label="Event details">
+        <div class="modal-card compact-card event-details-card">
+          <div class="modal-heading">
+            <h3 id="event-details-title">Event Details</h3>
+            <p id="event-details-subtitle" class="share-modal-filename"></p>
+          </div>
+          <div id="event-details-body" class="event-details-body"></div>
+          <div class="modal-actions">
+            <button class="soft-btn" data-close-modal="event-details-modal" type="button">Close</button>
+          </div>
         </div>
-      </form>
-    </div>
-  </div>
+      </div>
 
-  <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+      <!-- File/Folder History Modal -->
+      <div class="modal-backdrop" id="history-modal" hidden role="dialog" aria-modal="true" aria-label="File history">
+        <div class="modal-card compact-card history-card">
+          <div class="modal-heading">
+            <h3 id="history-modal-title">File History</h3>
+            <p id="history-modal-filename" class="share-modal-filename"></p>
+          </div>
+          <div id="history-modal-body" class="history-modal-body"></div>
+          <div class="modal-actions">
+            <button class="soft-btn" data-close-modal="history-modal" type="button">Close</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="toast-stack" id="toast-stack" role="status" aria-live="polite"></div>
+
+      <!-- WebDAV Settings Modal -->
+      <div class="modal-backdrop" id="webdav-modal" hidden role="dialog" aria-modal="true" aria-label="WebDAV Settings">
+        <div class="modal-card compact-card">
+          <div class="modal-heading">
+            <h3>WebDAV Access</h3>
+            <p>Connect to SkySync via WebDAV from Windows Explorer or any WebDAV client.</p>
+          </div>
+          <div id="webdav-token-list" class="webdav-token-list">
+            <p>Generating token list...</p>
+          </div>
+          <div class="modal-actions">
+            <button class="soft-btn" data-close-modal="webdav-modal" type="button">Close</button>
+            <button class="primary-btn" id="webdav-create-btn" type="button">Generate New Token</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-backdrop" id="webdav-create-modal" hidden role="dialog" aria-modal="true" aria-label="Create WebDAV Token">
+        <div class="modal-card compact-card">
+          <div class="modal-heading">
+            <h3>Create WebDAV Token</h3>
+            <p>Generate a new WebDAV access token.</p>
+          </div>
+          <form id="webdav-create-form" novalidate>
+            <input id="webdav-token-label" type="text" maxlength="100" placeholder="Token label (e.g. 'Home PC')" aria-label="Token label">
+            <div class="modal-actions">
+              <button class="soft-btn" data-close-modal="webdav-create-modal" type="button">Cancel</button>
+              <button class="primary-btn" type="submit" id="webdav-create-save">Create</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
 </body>
 
 </html>
