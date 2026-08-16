@@ -585,6 +585,23 @@ def file_record_to_api(record):
     }
 
 
+def get_base_url():
+    """Get the base URL for generating absolute URLs, respecting PROXY environments.
+
+    Uses PUBLIC_BASE_URL environment variable if set (for Render/proxy deployments),
+    otherwise falls back to request-based URL generation for local development.
+    """
+    public_base = os.getenv("PUBLIC_BASE_URL")
+    if public_base:
+        return public_base.rstrip('/')
+    # Fallback to current behavior for local dev
+    try:
+        return request.url_root.rstrip('/') if 'request' in globals() and request else os.getenv("FLASK_HOST", "0.0.0.0") + ":" + os.getenv("FLASK_PORT", "8000")
+    except:
+        # Ultimate fallback if request context is not available
+        return os.getenv("FLASK_HOST", "0.0.0.0") + ":" + os.getenv("FLASK_PORT", "8000")
+
+
 @app.route("/health")
 def health_check():
     return jsonify({"status": "healthy", "service": "SkySync", "version": "2.0.0"}), 200
@@ -677,8 +694,9 @@ def share_view(token):
         "is_previewable": is_previewable,
     }
 
-    download_url = url_for("shared_download", token=token)
-    preview_url = url_for("shared_preview", token=token) if is_previewable else ""
+    base_url = get_base_url()
+    download_url = f"{base_url}/api/share/{token}/download"
+    preview_url = f"{base_url}/api/share/{token}/preview" if is_previewable else ""
 
     expires_display = None
     if share["expires_at"]:
@@ -1546,7 +1564,8 @@ def create_file_share(file_id):
         metadata={"filename": record["filename"], "share_token": share["share_token"]},
     )
 
-    share_url = url_for("share_view", token=share["share_token"], _external=True)
+    base_url = get_base_url()
+    share_url = f"{base_url}/s/{share['share_token']}"
     return jsonify({
         "success": True,
         "message": "Share link created",
@@ -1589,7 +1608,7 @@ def list_shares():
                 "download_count": s.get("download_count", 0),
                 "last_accessed_at": s.get("last_accessed_at"),
                 "revoked_at": s.get("revoked_at"),
-                "url": url_for("share_view", token=s["share_token"], _external=True),
+                "url": f"{get_base_url()}/s/{s['share_token']}",
             }
             for s in shares
         ],
@@ -1818,7 +1837,7 @@ def get_profile():
             "storage_target": get_storage_chat(),
             "stats": stats,
             "webdav_token_count": token_count,
-            "webdav_url": request.host_url.rstrip("/") + "/webdav/",
+            "webdav_url": f"{get_base_url()}/webdav/",
         },
     }), 200
 
