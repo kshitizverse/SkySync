@@ -10,7 +10,7 @@ import json
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(1, os.path.join(os.path.dirname(__file__), ".."))
 
 from storage_db import (
     init_db,

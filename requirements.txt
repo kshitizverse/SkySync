@@ -7,3 +7,5 @@ werkzeug>=3.0.0
 redis>=5.0.0
 wsgidav>=4.0.0
 gunicorn>=22.0.0
+argon2-cffi>=23.1.0
+cryptography>=42.0.0

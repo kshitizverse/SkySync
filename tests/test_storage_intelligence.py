@@ -9,7 +9,6 @@ import os
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from storage_db import (
     init_db,
@@ -269,17 +268,10 @@ class TestStorageStatsEndpoint(unittest.TestCase):
         f2 = create_file_record(self.user_a["id"], 9301, "secret.pdf", "application/pdf", size=5000)
         from storage_db import vault_file
         vault_file(f2["id"], self.user_a["id"])
-        from storage_db import get_vault_settings, create_vault_settings
-        settings = get_vault_settings(self.user_a["id"])
-        if not settings:
-            from werkzeug.security import generate_password_hash
-            pin_hash = generate_password_hash("1234", method="pbkdf2:sha256", salt_length=16)
-            create_vault_settings(self.user_a["id"], pin_hash=pin_hash)
+        # Set PIN via endpoint
+        r_pin = self.client.post("/api/vault/pin", json={"pin": "1234"})
+        self.assertEqual(r_pin.status_code, 201)
         # Unlock vault via PIN
-        from werkzeug.security import generate_password_hash
-        pin_hash = generate_password_hash("1234", method="pbkdf2:sha256", salt_length=16)
-        with get_connection() as conn:
-            conn.execute("UPDATE vault_settings SET pin_hash = ? WHERE user_id = ?", (pin_hash, self.user_a["id"]))
         r = self.client.post("/api/vault/unlock", json={"pin": "1234"})
         self.assertEqual(r.status_code, 200)
         # Now request stats

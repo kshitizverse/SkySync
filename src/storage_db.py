@@ -109,10 +109,21 @@ def init_db():
                 is_favorite INTEGER NOT NULL DEFAULT 0,
                 is_deleted INTEGER NOT NULL DEFAULT 0,
                 deleted_at TEXT,
+                folder_id INTEGER DEFAULT NULL,
+                is_vaulted INTEGER NOT NULL DEFAULT 0,
+                -- Encryption metadata
+                enc_version TINYINT DEFAULT 0,
+                dek_wrap_nonce BLOB,
+                dek_wrap_cipher BLOB,
+                dek_wrap_tag BLOB,
+                file_enc_nonce BLOB,
+                file_enc_tag BLOB,
+                enc_flag INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
             """
         )
+        # Add columns if they don't exist (for backwards compatibility)
         file_cols = {
             row["name"]
             for row in conn.execute("PRAGMA table_info(file_records)").fetchall()
@@ -127,6 +138,20 @@ def init_db():
             conn.execute("ALTER TABLE file_records ADD COLUMN folder_id INTEGER DEFAULT NULL")
         if "is_vaulted" not in file_cols:
             conn.execute("ALTER TABLE file_records ADD COLUMN is_vaulted INTEGER NOT NULL DEFAULT 0")
+        if "enc_version" not in file_cols:
+            conn.execute("ALTER TABLE file_records ADD COLUMN enc_version TINYINT DEFAULT 0")
+        if "dek_wrap_nonce" not in file_cols:
+            conn.execute("ALTER TABLE file_records ADD COLUMN dek_wrap_nonce BLOB")
+        if "dek_wrap_cipher" not in file_cols:
+            conn.execute("ALTER TABLE file_records ADD COLUMN dek_wrap_cipher BLOB")
+        if "dek_wrap_tag" not in file_cols:
+            conn.execute("ALTER TABLE file_records ADD COLUMN dek_wrap_tag BLOB")
+        if "file_enc_nonce" not in file_cols:
+            conn.execute("ALTER TABLE file_records ADD COLUMN file_enc_nonce BLOB")
+        if "file_enc_tag" not in file_cols:
+            conn.execute("ALTER TABLE file_records ADD COLUMN file_enc_tag BLOB")
+        if "enc_flag" not in file_cols:
+            conn.execute("ALTER TABLE file_records ADD COLUMN enc_flag INTEGER NOT NULL DEFAULT 0")
 
         conn.execute(
             """
@@ -229,10 +254,43 @@ def init_db():
                 locked_until TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
+                -- Encryption metadata
+                enc_version TINYINT DEFAULT 1,
+                kdf_algo VARCHAR(16) DEFAULT 'argon2id',
+                kdf_salt BLOB,
+                kdf_mem SMALLINT DEFAULT 64,
+                kdf_iter SMALLINT DEFAULT 3,
+                kdf_parallel SMALLINT DEFAULT 4,
+                vmk_wrap_nonce BLOB,
+                vmk_wrap_cipher BLOB,
+                vmk_wrap_tag BLOB,
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
             """
         )
+        # Add encryption columns if they don't exist (for backwards compatibility)
+        vault_settings_cols = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(vault_settings)").fetchall()
+        }
+        if "enc_version" not in vault_settings_cols:
+            conn.execute("ALTER TABLE vault_settings ADD COLUMN enc_version TINYINT DEFAULT 1")
+        if "kdf_algo" not in vault_settings_cols:
+            conn.execute("ALTER TABLE vault_settings ADD COLUMN kdf_algo VARCHAR(16) DEFAULT 'argon2id'")
+        if "kdf_salt" not in vault_settings_cols:
+            conn.execute("ALTER TABLE vault_settings ADD COLUMN kdf_salt BLOB")
+        if "kdf_mem" not in vault_settings_cols:
+            conn.execute("ALTER TABLE vault_settings ADD COLUMN kdf_mem SMALLINT DEFAULT 64")
+        if "kdf_iter" not in vault_settings_cols:
+            conn.execute("ALTER TABLE vault_settings ADD COLUMN kdf_iter SMALLINT DEFAULT 3")
+        if "kdf_parallel" not in vault_settings_cols:
+            conn.execute("ALTER TABLE vault_settings ADD COLUMN kdf_parallel SMALLINT DEFAULT 4")
+        if "vmk_wrap_nonce" not in vault_settings_cols:
+            conn.execute("ALTER TABLE vault_settings ADD COLUMN vmk_wrap_nonce BLOB")
+        if "vmk_wrap_cipher" not in vault_settings_cols:
+            conn.execute("ALTER TABLE vault_settings ADD COLUMN vmk_wrap_cipher BLOB")
+        if "vmk_wrap_tag" not in vault_settings_cols:
+            conn.execute("ALTER TABLE vault_settings ADD COLUMN vmk_wrap_tag BLOB")
 
         conn.execute(
             """
@@ -950,6 +1008,84 @@ def disable_vault(user_id):
             "UPDATE vault_settings SET vault_enabled = 0, updated_at = ? WHERE user_id = ?",
             (now, user_id),
         )
+
+
+def update_vault_encryption(user_id, enc_version=None, kdf_algo=None, kdf_salt=None,
+                            kdf_mem=None, kdf_iter=None, kdf_parallel=None,
+                            vmk_wrap_nonce=None, vmk_wrap_cipher=None, vmk_wrap_tag=None):
+    """Update the encryption metadata in vault_settings."""
+    with get_connection() as conn:
+        fields = []
+        values = []
+        if enc_version is not None:
+            fields.append("enc_version = ?")
+            values.append(enc_version)
+        if kdf_algo is not None:
+            fields.append("kdf_algo = ?")
+            values.append(kdf_algo)
+        if kdf_salt is not None:
+            fields.append("kdf_salt = ?")
+            values.append(kdf_salt)
+        if kdf_mem is not None:
+            fields.append("kdf_mem = ?")
+            values.append(kdf_mem)
+        if kdf_iter is not None:
+            fields.append("kdf_iter = ?")
+            values.append(kdf_iter)
+        if kdf_parallel is not None:
+            fields.append("kdf_parallel = ?")
+            values.append(kdf_parallel)
+        if vmk_wrap_nonce is not None:
+            fields.append("vmk_wrap_nonce = ?")
+            values.append(vmk_wrap_nonce)
+        if vmk_wrap_cipher is not None:
+            fields.append("vmk_wrap_cipher = ?")
+            values.append(vmk_wrap_cipher)
+        if vmk_wrap_tag is not None:
+            fields.append("vmk_wrap_tag = ?")
+            values.append(vmk_wrap_tag)
+        if not fields:
+            return
+        values.append(utcnow_iso())  # updated_at
+        values.append(user_id)
+        stmt = f"UPDATE vault_settings SET {', '.join(fields)}, updated_at = ? WHERE user_id = ?"
+        conn.execute(stmt, values)
+
+
+def update_file_encryption(file_id, user_id, enc_version=None,
+                           dek_wrap_nonce=None, dek_wrap_cipher=None, dek_wrap_tag=None,
+                           file_enc_nonce=None, file_enc_tag=None, enc_flag=None):
+    """Update the encryption metadata for a file record."""
+    with get_connection() as conn:
+        fields = []
+        values = []
+        if enc_version is not None:
+            fields.append("enc_version = ?")
+            values.append(enc_version)
+        if dek_wrap_nonce is not None:
+            fields.append("dek_wrap_nonce = ?")
+            values.append(dek_wrap_nonce)
+        if dek_wrap_cipher is not None:
+            fields.append("dek_wrap_cipher = ?")
+            values.append(dek_wrap_cipher)
+        if dek_wrap_tag is not None:
+            fields.append("dek_wrap_tag = ?")
+            values.append(dek_wrap_tag)
+        if file_enc_nonce is not None:
+            fields.append("file_enc_nonce = ?")
+            values.append(file_enc_nonce)
+        if file_enc_tag is not None:
+            fields.append("file_enc_tag = ?")
+            values.append(file_enc_tag)
+        if enc_flag is not None:
+            fields.append("enc_flag = ?")
+            values.append(enc_flag)
+        if not fields:
+            return
+        values.append(file_id)
+        values.append(user_id)
+        stmt = f"UPDATE file_records SET {', '.join(fields)} WHERE id = ? AND user_id = ?"
+        conn.execute(stmt, values)
 
 
 # ---------------------------------------------------------------------------

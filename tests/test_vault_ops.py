@@ -7,10 +7,10 @@ Uses mocked Telegram access — no real OTP required.
 """
 import sys
 import os
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from storage_db import (
     init_db,
@@ -31,6 +31,23 @@ from storage_db import (
 from main import app
 from vault import vault_bp, VAULT_INACTIVITY_SECONDS
 
+# Global variable to hold the session path for dummy Telegram sessions in tests
+_SESSION_PATH = None
+
+
+def _get_or_create_user(tg_id, phone, name, email, session_path=None):
+    from storage_db import get_user_by_telegram_id
+    user = get_user_by_telegram_id(tg_id)
+    if user:
+        return user
+    if session_path is None:
+        session_path = _SESSION_PATH
+    return create_user(
+        email=email, phone=phone,
+        name=name, telegram_user_id=tg_id,
+        session_path=session_path,
+    )
+
 
 def _cleanup_test_data():
     """Remove test users and vault data from DB."""
@@ -49,18 +66,6 @@ def _cleanup_test_data():
                 conn.execute("DELETE FROM users WHERE id = ?", (uid,))
 
 
-def _get_or_create_user(tg_id, phone, name, email):
-    from storage_db import get_user_by_telegram_id
-    user = get_user_by_telegram_id(tg_id)
-    if user:
-        return user
-    return create_user(
-        email=email, phone=phone,
-        name=name, telegram_user_id=tg_id,
-        session_path="/fake/path.session",
-    )
-
-
 class VaultOpsTestBase(unittest.TestCase):
     """Base class: inits DB, creates two test users."""
 
@@ -69,8 +74,25 @@ class VaultOpsTestBase(unittest.TestCase):
         app.config["TESTING"] = True
         init_db()
         _cleanup_test_data()
+        # Set up dummy Telegram credentials and test mode
+        os.environ['TELEGRAM_API_ID'] = '12345'
+        os.environ['TELEGRAM_API_HASH'] = 'dummyhash'
+        os.environ['TELEGRAM_TEST_MODE'] = '1'
+        # Create a dummy session file for the Telegram handler
+        global _SESSION_PATH
+        cls._session_fd, _SESSION_PATH = tempfile.mkstemp(suffix='.session')
+        os.close(cls._session_fd)
+        # Create an empty session file
+        open(_SESSION_PATH, 'a').close()
         cls.user_a = _get_or_create_user("400001", "+4000000001", "Vault Ops User A", "voa@test.local")
         cls.user_b = _get_or_create_user("400002", "+4000000002", "Vault Ops User B", "vob@test.local")
+
+    @classmethod
+    def tearDownClass(cls):
+        global _SESSION_PATH
+        if _SESSION_PATH and os.path.exists(_SESSION_PATH):
+            os.unlink(_SESSION_PATH)
+        _SESSION_PATH = None
 
     def setUp(self):
         self.client = app.test_client()
@@ -197,8 +219,11 @@ class TestVaultRestoreFile(VaultOpsTestBase):
         """Vault restore succeeds when vault is unlocked."""
         self._setup_vault()
         self._unlock()
-        vault_file(self.file_a1["id"], self.user_a["id"])
         self._login(self.user_a["id"])
+        # Vault the file using the move endpoint
+        r_move = self.client.post("/api/vault/move", json={"type": "file", "id": self.file_a1["id"]})
+        self.assertEqual(r_move.status_code, 200)
+        # Now restore it
         r = self.client.post("/api/vault/restore", json={"type": "file", "id": self.file_a1["id"]})
         self.assertEqual(r.status_code, 200)
         data = r.get_json()
@@ -208,8 +233,11 @@ class TestVaultRestoreFile(VaultOpsTestBase):
         """Vault restore sets is_vaulted=0 in DB."""
         self._setup_vault()
         self._unlock()
-        vault_file(self.file_a1["id"], self.user_a["id"])
         self._login(self.user_a["id"])
+        # Vault the file using the move endpoint
+        r_move = self.client.post("/api/vault/move", json={"type": "file", "id": self.file_a1["id"]})
+        self.assertEqual(r_move.status_code, 200)
+        # Now restore it
         self.client.post("/api/vault/restore", json={"type": "file", "id": self.file_a1["id"]})
         self.assertFalse(is_file_vaulted(self.file_a1["id"], self.user_a["id"]))
 

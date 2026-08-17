@@ -11,7 +11,6 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from storage_db import (
     init_db,
@@ -80,15 +79,17 @@ def _cleanup_test_data():
                 conn.execute("DELETE FROM users WHERE id = ?", (uid,))
 
 
-def _get_or_create_user(tg_id, phone, name, email):
+def _get_or_create_user(tg_id, phone, name, email, session_path=None):
     from storage_db import get_user_by_telegram_id
     user = get_user_by_telegram_id(tg_id)
     if user:
         return user
+    if session_path is None:
+        session_path = "/fake/path.session"
     return create_user(
         email=email, phone=phone,
         name=name, telegram_user_id=tg_id,
-        session_path="/fake/path.session",
+        session_path=session_path,
     )
 
 
@@ -98,8 +99,17 @@ class ShareTestBase(unittest.TestCase):
         app.config["TESTING"] = True
         init_db()
         _cleanup_test_data()
-        cls.user_a = _get_or_create_user("500001", "+5000000001", "Share User A", "sa@test.local")
-        cls.user_b = _get_or_create_user("500002", "+5000000002", "Share User B", "sb@test.local")
+        # Set up dummy Telegram credentials and session for tests
+        os.environ['TELEGRAM_API_ID'] = '12345'
+        os.environ['TELEGRAM_API_HASH'] = 'dummyhash'
+        os.environ['TELEGRAM_TEST_MODE'] = '1'
+        from telegram_handler import SESSIONS_DIR
+        os.makedirs(SESSIONS_DIR, exist_ok=True)
+        cls.dummy_session_path = os.path.join(SESSIONS_DIR, 'fake.session')
+        # Ensure the session file exists
+        open(cls.dummy_session_path, 'a').close()
+        cls.user_a = _get_or_create_user("500001", "+5000000001", "Share User A", "sa@test.local", session_path=cls.dummy_session_path)
+        cls.user_b = _get_or_create_user("500002", "+5000000002", "Share User B", "sb@test.local", session_path=cls.dummy_session_path)
 
     def setUp(self):
         self.client = app.test_client()

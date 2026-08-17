@@ -200,6 +200,15 @@ class SkySyncFolder(DAVCollection):
         if not user_id:
             from wsgidav.dav_provider import DAVError
             raise DAVError(403, "Forbidden")
+        # Check if parent folder is vaulted and locked
+        if self._folder and self._folder.get("is_vaulted"):
+            try:
+                from vault import vault_is_unlocked
+                if not vault_is_unlocked(user_id):
+                    from wsgidav.dav_provider import DAVError
+                    raise DAVError(403, "Vault is locked")
+            except Exception:
+                pass
         from storage_db import create_folder, log_activity
         parent_id = self._folder["id"] if self._folder else None
         create_folder(user_id, name, parent_id=parent_id)
@@ -217,6 +226,15 @@ class SkySyncFolder(DAVCollection):
         if not user_id:
             from wsgidav.dav_provider import DAVError
             raise DAVError(403, "Forbidden")
+        # Check if parent folder is vaulted and locked
+        if self._folder and self._folder.get("is_vaulted"):
+            try:
+                from vault import vault_is_unlocked
+                if not vault_is_unlocked(user_id):
+                    from wsgidav.dav_provider import DAVError
+                    raise DAVError(403, "Vault is locked")
+            except Exception:
+                pass
         from storage_db import log_activity
         log_activity(user_id, "webdav_create_empty", detail=name)
         folder_id = self._folder["id"] if self._folder else None

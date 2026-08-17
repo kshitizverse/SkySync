@@ -325,7 +325,7 @@ def _setup_webdav():
 
 _setup_webdav()
 
-from vault import vault_bp
+from vault import vault_bp, get_vault_plaintext
 app.register_blueprint(vault_bp)
 
 
@@ -1208,6 +1208,12 @@ def download_file(file_id):
         if not vault_is_unlocked(user["id"]):
             return jsonify({"success": False, "error": "Vault is locked"}), 403
 
+    # Get plaintext bytes (handles encryption/decryption and just-in-time encryption for vaulted files)
+    from vault import get_vault_plaintext
+    plaintext = get_vault_plaintext(file_id, user["id"])
+    if plaintext is None:
+        return jsonify({"success": False, "error": "Failed to retrieve file"}), 500
+
     cached = create_telegram_handler_for_user(user)
     if not cached:
         return jsonify({"success": False, "error": "Telegram storage is not configured"}), 503
@@ -1216,15 +1222,17 @@ def download_file(file_id):
     safe_name = sanitize_filename(record["filename"]) or f"file_{file_id}"
     output_path = os.path.join("downloads", f"{file_id}_{safe_name}")
     try:
-        success = run_telegram_op(cached, cached.handler.download_file(record["telegram_message_id"], output_path))
-        if not success or not os.path.exists(output_path):
-            return jsonify({"success": False, "error": "Download failed"}), 500
+        with open(output_path, "wb") as f:
+            f.write(plaintext)
         log_activity(user["id"], "download", detail=record["filename"], ip_address=client_ip())
         record_activity(
             user["id"], "FILE_DOWNLOADED", resource_type="file", resource_id=file_id,
-            metadata={"filename": record["filename"], "size": record.get("size")},
+            metadata={"filename": record["filename"], "size": len(plaintext)},
         )
         return send_file(output_path, as_attachment=True, download_name=record["filename"])
+    except Exception as e:
+        logger.error(f"Failed to write download file: {e}")
+        return jsonify({"success": False, "error": "Download failed"}), 500
     finally:
         if os.path.exists(output_path):
             try:
@@ -1252,17 +1260,22 @@ def preview_file(file_id):
     if not (mime_type.startswith("image/") or mime_type.startswith("video/") or mime_type.startswith("audio/")):
         return jsonify({"success": False, "error": "Preview not available for this file type"}), 400
 
-    cached = create_telegram_handler_for_user(user)
-    if not cached:
-        return jsonify({"success": False, "error": "Telegram storage is not configured"}), 503
+    # Get plaintext bytes (handles encryption/decryption and just-in-time encryption for vaulted files)
+    from vault import get_vault_plaintext
+    plaintext = get_vault_plaintext(file_id, user["id"])
+    if plaintext is None:
+        return jsonify({"success": False, "error": "Failed to retrieve file"}), 500
 
     os.makedirs("previews", exist_ok=True)
     safe_name = sanitize_filename(record["filename"]) or f"preview_{file_id}"
     preview_path = os.path.join("previews", f"{file_id}_{safe_name}")
     if not os.path.exists(preview_path) or os.path.getsize(preview_path) == 0:
-        success = run_telegram_op(cached, cached.handler.download_file(record["telegram_message_id"], preview_path))
-        if not success or not os.path.exists(preview_path):
-            return jsonify({"success": False, "error": "Preview download failed"}), 500
+        try:
+            with open(preview_path, "wb") as f:
+                f.write(plaintext)
+        except Exception as e:
+            logger.error(f"Failed to write preview file: {e}")
+            return jsonify({"success": False, "error": "Preview generation failed"}), 500
 
     record_activity(
         user["id"], "FILE_PREVIEWED", resource_type="file", resource_id=file_id,
