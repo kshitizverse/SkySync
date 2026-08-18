@@ -138,28 +138,52 @@ async function bootstrapWorkspace() {
   }
 
   try {
-    const [profileResult, filesResult] = await Promise.all([
-      fetchJSON(routes.profile),
-      fetchJSON(routes.files + (folderIdParam ? '?folder_id=' + folderIdParam : ''))
-    ]);
-    state.profile = profileResult.user;
-    state.allFiles = normalizeFiles(filesResult.files || []);
-    state.files = state.allFiles;
-    state.allFolders = filesResult.folders || [];
-    state.folders = state.allFolders;
-    state.summary = filesResult.summary || createEmptySummary();
-    renderProfile();
-    renderGreeting();
-    renderStats();
-    if (state.currentFolderId) {
-      await loadBreadcrumb(state.currentFolderId);
+    // Set up timeout controllers for API requests
+    const profileController = new AbortController();
+    const filesController = new AbortController();
+    const timeoutDelay = 15000; // 15 seconds timeout
+    const profileTimeout = setTimeout(() => profileController.abort(), timeoutDelay);
+    const filesTimeout = setTimeout(() => filesController.abort(), timeoutDelay);
+
+    try {
+      const [profileResult, filesResult] = await Promise.all([
+        fetchJSON(routes.profile, { signal: profileController.signal }),
+        fetchJSON(routes.files + (folderIdParam ? '?folder_id=' + folderIdParam : ''), { signal: filesController.signal })
+      ]);
+
+      // Clear timeouts on success
+      clearTimeout(profileTimeout);
+      clearTimeout(filesTimeout);
+
+      state.profile = profileResult.user;
+      state.allFiles = normalizeFiles(filesResult.files || []);
+      state.files = state.allFiles;
+      state.allFolders = filesResult.folders || [];
+      state.folders = state.allFolders;
+      state.summary = filesResult.summary || createEmptySummary();
+      renderProfile();
+      renderGreeting();
+      renderStats();
+      if (state.currentFolderId) {
+        await loadBreadcrumb(state.currentFolderId);
+      }
+      renderWorkspace();
+      renderFolderBar();
+      promptForNameIfNeeded();
+    } finally {
+      // Always clear timeouts to prevent leaks
+      clearTimeout(profileTimeout);
+      clearTimeout(filesTimeout);
     }
-    renderWorkspace();
-    renderFolderBar();
-    promptForNameIfNeeded();
   } catch (error) {
-    showBanner(error.message || 'Unable to load your workspace.', 'error');
-    showToast(error.message || 'Workspace load failed', 'error');
+    // Handle timeout and other errors
+    if (error.name === 'AbortError') {
+      showBanner('Request timed out. Please check your connection and try again.', 'error');
+      showToast('Workspace load timed out', 'error');
+    } else {
+      showBanner(error.message || 'Unable to load your workspace.', 'error');
+      showToast(error.message || 'Workspace load failed', 'error');
+    }
     state.files = [];
     state.allFiles = [];
     state.summary = createEmptySummary();
@@ -361,6 +385,10 @@ function setupDropzone() {
 
 function setupContextMenu() {
   const menu = document.getElementById('context-menu');
+  // Ensure menu is hidden and context cleared on initialization
+  menu.hidden = true;
+  state.contextTarget = null;
+
   document.addEventListener('click', () => {
     menu.hidden = true;
     state.contextTarget = null;
