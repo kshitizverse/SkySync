@@ -63,10 +63,14 @@ function setupNavigationGuards() {
         loadViewData('files');
       } else if (viewParam === 'shares') {
         hideAllViews();
+        showMainContent();
+        document.getElementById('content-panel').hidden = true;
         document.getElementById('shares-view').hidden = false;
         loadShares();
       } else if (viewParam === 'settings') {
         hideAllViews();
+        showMainContent();
+        document.getElementById('content-panel').hidden = true;
         document.getElementById('settings-view').hidden = false;
         // Update back button in settings toolbar
         const settingsBackBtn = document.getElementById('settings-back-btn');
@@ -79,10 +83,14 @@ function setupNavigationGuards() {
         loadSettingsViewContent();
       } else if (viewParam === 'activity') {
         hideAllViews();
+        showMainContent();
+        document.getElementById('content-panel').hidden = true;
         document.getElementById('activity-view').hidden = false;
         loadActivity();
       } else if (viewParam === 'storage-intel') {
         hideAllViews();
+        showMainContent();
+        document.getElementById('content-panel').hidden = true;
         document.getElementById('storage-intel-view').hidden = false;
         loadStorageIntelligence();
       } else if (viewParam === 'vault') {
@@ -181,6 +189,8 @@ function setupEventListeners() {
         document.querySelectorAll('.sidebar-nav .nav-item').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         hideAllViews();
+        showMainContent();
+        document.getElementById('content-panel').hidden = true;
         document.getElementById('shares-view').hidden = false;
         loadShares();
         closeSidebar();
@@ -191,6 +201,8 @@ function setupEventListeners() {
         document.querySelectorAll('.sidebar-nav .nav-item').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         hideAllViews();
+        showMainContent();
+        document.getElementById('content-panel').hidden = true;
         document.getElementById('activity-view').hidden = false;
         loadActivity();
         closeSidebar();
@@ -201,6 +213,8 @@ function setupEventListeners() {
         document.querySelectorAll('.sidebar-nav .nav-item').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         hideAllViews();
+        showMainContent();
+        document.getElementById('content-panel').hidden = true;
         document.getElementById('storage-intel-view').hidden = false;
         loadStorageIntelligence();
         closeSidebar();
@@ -211,6 +225,8 @@ function setupEventListeners() {
         document.querySelectorAll('.sidebar-nav .nav-item').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         hideAllViews();
+        showMainContent();
+        document.getElementById('content-panel').hidden = true;
         document.getElementById('settings-view').hidden = false;
         // Update back button in settings toolbar
         const settingsBackBtn = document.getElementById('settings-back-btn');
