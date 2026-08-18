@@ -361,29 +361,33 @@ function setupDropzone() {
 
 function setupContextMenu() {
   const menu = document.getElementById('context-menu');
-  document.addEventListener('click', () => { menu.hidden = true; });
+  document.addEventListener('click', () => {
+    menu.hidden = true;
+    state.contextTarget = null;
+  });
   document.addEventListener('contextmenu', (e) => {
-    const card = e.target.closest('.file-card');
-    if (!card) return;
-    e.preventDefault();
-    const fileId = parseInt(card.dataset.fileId);
-    const file = state.files.find(f => f.id === fileId);
-    if (!file) return;
-    state.contextTarget = file;
+    try {
+      const card = e.target.closest('.file-card');
+      if (!card) return;
+      e.preventDefault();
+      const fileId = parseInt(card.dataset.fileId);
+      const file = state.files.find(f => f.id === fileId);
+      if (!file) return;
+      state.contextTarget = file;
 
-    const vaultMoveBtn = menu.querySelector('[data-action="vault-move"]');
-    const vaultRestoreBtn = menu.querySelector('[data-action="vault-restore"]');
-    if (file.is_vaulted) {
-      vaultMoveBtn.hidden = true;
-      vaultRestoreBtn.hidden = false;
-    } else {
-      vaultMoveBtn.hidden = false;
-      vaultRestoreBtn.hidden = true;
+      const vaultMoveBtn = menu.querySelector('[data-action="vault-move"]');
+      const vaultRestoreBtn = menu.querySelector('[data-action="vault-restore"]');
+      if (vaultMoveBtn) vaultMoveBtn.hidden = !file.is_vaulted;
+      if (vaultRestoreBtn) vaultRestoreBtn.hidden = file.is_vaulted;
+
+      menu.hidden = false;
+      menu.style.left = `${Math.min(e.clientX, window.innerWidth - 200)}px`;
+      menu.style.top = `${Math.min(e.clientY, window.innerHeight - 250)}px`;
+    } catch (err) {
+      console.error('Context menu error:', err);
+      menu.hidden = true;
+      state.contextTarget = null;
     }
-
-    menu.hidden = false;
-    menu.style.left = `${Math.min(e.clientX, window.innerWidth - 200)}px`;
-    menu.style.top = `${Math.min(e.clientY, window.innerHeight - 250)}px`;
   });
 
   menu.querySelectorAll('.ctx-item').forEach((item) => {
@@ -1447,7 +1451,7 @@ function setLoading(isLoading) {
   var loadingEl = document.getElementById('loading-state');
   var gridEl = document.getElementById('files-grid');
   if (isLoading) {
-    loadingEl.style.display = 'none';
+    loadingEl.style.display = 'flex';
     gridEl.style.display = 'none';
     renderSkeletonGrid();
   } else {
