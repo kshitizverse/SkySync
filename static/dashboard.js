@@ -67,6 +67,7 @@ function setupNavigationGuards() {
         loadShares();
       } else if (viewParam === 'settings') {
         hideAllViews();
+        showMainContent();
         document.getElementById('settings-view').hidden = false;
         // Update back button in settings toolbar
         const settingsBackBtn = document.getElementById('settings-back-btn');
@@ -96,6 +97,23 @@ function setupNavigationGuards() {
 
     // Handle popstate for settings view (fallback for state changes)
     if (state.currentView === 'settings') {
+        hideAllViews();
+        showMainContent();
+        document.getElementById("settings-view").hidden = false;
+        // Update active nav item
+        document.querySelectorAll(".sidebar-nav .nav-item").forEach(b => b.classList.remove("active"));
+        const settingsNavBtn = document.querySelector(".sidebar-nav .nav-item[data-view="settings"]");
+        if (settingsNavBtn) settingsNavBtn.classList.add("active");
+        // Update back button in settings toolbar
+        const settingsBackBtn = document.getElementById("settings-back-btn");
+        if (settingsBackBtn) {
+          settingsBackBtn.textContent = "← Back";
+          settingsBackBtn.onclick = () => {
+            navigateToFiles();
+          };
+        }
+      };
+    }
       loadSettingsViewContent();
     }
   });
@@ -209,8 +227,8 @@ function setupEventListeners() {
       if (view === 'settings') {
         state.currentView = 'settings';
         document.querySelectorAll('.sidebar-nav .nav-item').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
         hideAllViews();
+        showMainContent();
         document.getElementById('settings-view').hidden = false;
         // Update back button in settings toolbar
         const settingsBackBtn = document.getElementById('settings-back-btn');
@@ -2733,16 +2751,13 @@ function showVaultLockScreen() {
 function showVaultUnlocked() {
   document.getElementById('vault-lock-screen').hidden = true;
   document.getElementById('vault-view').hidden = false;
-  startAutoLockTimer();
-}
-
-function showSettingsView() {
   hideAllViews();
-  document.getElementById('settings-view').hidden = false;
+  showMainContent();
+  document.getElementById("settings-view").hidden = false;
   // Update back button in settings toolbar
-  const settingsBackBtn = document.getElementById('settings-back-btn');
+  const settingsBackBtn = document.getElementById("settings-back-btn");
   if (settingsBackBtn) {
-    settingsBackBtn.textContent = '← Back';
+    settingsBackBtn.textContent = "← Back";
     settingsBackBtn.onclick = () => {
       navigateToFiles();
     };
