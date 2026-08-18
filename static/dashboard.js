@@ -57,20 +57,32 @@ function setupNavigationGuards() {
       }
 
       // Show the appropriate view
-      showMainViews();
       if (viewParam === 'files') {
-        document.getElementById('files-view').hidden = false;
+        hideAllViews();
+        showMainContent();
         loadViewData('files');
-      } else if (viewParam === 'settings') {
-        document.getElementById('settings-view').hidden = false;
-        loadSettingsViewContent();
       } else if (viewParam === 'shares') {
+        hideAllViews();
         document.getElementById('shares-view').hidden = false;
         loadShares();
+      } else if (viewParam === 'settings') {
+        hideAllViews();
+        document.getElementById('settings-view').hidden = false;
+        // Update back button in settings toolbar
+        const settingsBackBtn = document.getElementById('settings-back-btn');
+        if (settingsBackBtn) {
+          settingsBackBtn.textContent = '← Back';
+          settingsBackBtn.onclick = () => {
+            navigateToFiles();
+          };
+        }
+        loadSettingsViewContent();
       } else if (viewParam === 'activity') {
+        hideAllViews();
         document.getElementById('activity-view').hidden = false;
         loadActivity();
       } else if (viewParam === 'storage-intel') {
+        hideAllViews();
         document.getElementById('storage-intel-view').hidden = false;
         loadStorageIntelligence();
       } else if (viewParam === 'vault') {
@@ -82,9 +94,6 @@ function setupNavigationGuards() {
       return; // Skip the rest of the popstate handling
     }
 
-    if (state.currentView === 'files') {
-      loadViewData(state.currentView);
-    }
     // Handle popstate for settings view (fallback for state changes)
     if (state.currentView === 'settings') {
       loadSettingsViewContent();
@@ -171,6 +180,7 @@ function setupEventListeners() {
         state.currentView = 'shares';
         document.querySelectorAll('.sidebar-nav .nav-item').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
+        hideAllViews();
         document.getElementById('shares-view').hidden = false;
         loadShares();
         closeSidebar();
@@ -180,7 +190,7 @@ function setupEventListeners() {
         state.currentView = 'activity';
         document.querySelectorAll('.sidebar-nav .nav-item').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
-        showMainViews();
+        hideAllViews();
         document.getElementById('activity-view').hidden = false;
         loadActivity();
         closeSidebar();
@@ -190,7 +200,7 @@ function setupEventListeners() {
         state.currentView = 'storage-intel';
         document.querySelectorAll('.sidebar-nav .nav-item').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
-        showMainViews();
+        hideAllViews();
         document.getElementById('storage-intel-view').hidden = false;
         loadStorageIntelligence();
         closeSidebar();
@@ -200,8 +210,16 @@ function setupEventListeners() {
         state.currentView = 'settings';
         document.querySelectorAll('.sidebar-nav .nav-item').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
-        showMainViews();
+        hideAllViews();
         document.getElementById('settings-view').hidden = false;
+        // Update back button in settings toolbar
+        const settingsBackBtn = document.getElementById('settings-back-btn');
+        if (settingsBackBtn) {
+          settingsBackBtn.textContent = '← Back';
+          settingsBackBtn.onclick = () => {
+            navigateToFiles();
+          };
+        }
         history.pushState({ view: 'settings' }, '', '?view=settings');
         loadSettingsViewContent();
         closeSidebar();
@@ -2680,8 +2698,21 @@ function hideAllViews() {
     if (header) header.hidden = true;
   }
   document.getElementById('shares-view').hidden = true;
+  document.getElementById('vault-view').hidden = true;
+  document.getElementById('vault-lock-screen').hidden = true;
+  document.getElementById('activity-view').hidden = true;
   document.getElementById('storage-intel-view').hidden = true;
   document.getElementById('settings-view').hidden = true;
+}
+
+function showMainContent() {
+  var mainPanel = document.querySelector('.main-panel');
+  if (mainPanel) {
+    var sections = mainPanel.querySelectorAll('.stats-row, .toolbar.panel, .content-panel, .status-strip');
+    sections.forEach(function(s) { s.hidden = false; });
+    var header = mainPanel.querySelector('.dashboard-header');
+    if (header) header.hidden = false;
+  }
 }
 
 function showVaultLockScreen() {
