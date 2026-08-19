@@ -652,7 +652,7 @@ function renderProfile() {
   const displayName = profileDisplayName(state.profile) || 'SkySync Member';
   const metaLines = [];
   if (state.profile.phone) metaLines.push(formatPhoneNumber(state.profile.phone));
-  if (state.profile.email && !state.profile.email.includes('telegram.local')) {
+  if (state.profile.email && typeof state.profile.email === 'string' && !state.profile.email.includes('telegram.local')) {
     metaLines.push(state.profile.email);
   }
   document.getElementById('profile-avatar').textContent = profileInitials(state.profile);
@@ -1769,7 +1769,7 @@ function profileDisplayName(p) {
   const name = (p?.name || '').trim();
   if (name) return name;
   const email = p?.email || '';
-  if (email) {
+  if (email && typeof email === 'string') {
     const local = email.split('@')[0];
     return local && !local.startsWith('telegram_') ? local : '';
   }
