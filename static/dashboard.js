@@ -102,7 +102,7 @@ function setupNavigationGuards() {
         document.getElementById("settings-view").hidden = false;
         // Update active nav item
         document.querySelectorAll(".sidebar-nav .nav-item").forEach(b => b.classList.remove("active"));
-        const settingsNavBtn = document.querySelector(".sidebar-nav .nav-item[data-view="settings"]");
+        const settingsNavBtn = document.querySelector('.sidebar-nav .nav-item[data-view="settings"]');
         if (settingsNavBtn) settingsNavBtn.classList.add("active");
         // Update back button in settings toolbar
         const settingsBackBtn = document.getElementById("settings-back-btn");
@@ -112,9 +112,7 @@ function setupNavigationGuards() {
             navigateToFiles();
           };
         }
-      };
-    }
-      loadSettingsViewContent();
+        loadSettingsViewContent();
     }
   });
   history.replaceState(null, '', location.pathname);
