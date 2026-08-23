@@ -2741,10 +2741,14 @@ function updateVaultNav() {
 function hideAllViews() {
   var mainPanel = document.querySelector('.main-panel');
   if (mainPanel) {
-    var sections = mainPanel.querySelectorAll('.stats-row, .toolbar.panel, .content-panel, .status-strip');
-    sections.forEach(function(s) { s.hidden = true; });
-    var header = mainPanel.querySelector('.dashboard-header');
-    if (header) header.hidden = true;
+    // Only hide My Drive's OWN top-level sections (direct children of .main-panel).
+    // Do NOT reach into named view containers (shares/activity/settings/vault),
+    // whose inner .content-panel must stay visible when their container is shown.
+    Array.prototype.forEach.call(mainPanel.children, function(s) {
+      if (s.matches && s.matches('.dashboard-header, .stats-row, .toolbar.panel, .content-panel, .status-strip')) {
+        s.hidden = true;
+      }
+    });
   }
   document.getElementById('shares-view').hidden = true;
   document.getElementById('vault-view').hidden = true;
