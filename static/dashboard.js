@@ -250,7 +250,6 @@ function setupEventListeners() {
         state.currentView = 'settings';
         document.querySelectorAll('.sidebar-nav .nav-item').forEach(b => b.classList.remove('active'));
         hideAllViews();
-        showMainContent();
         document.getElementById('settings-view').hidden = false;
         // Update back button in settings toolbar
         const settingsBackBtn = document.getElementById('settings-back-btn');
