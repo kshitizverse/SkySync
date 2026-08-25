@@ -784,7 +784,6 @@ def vault_restore():
         if not record.get("is_vaulted"):
             return jsonify({"success": False, "error": "File is not in Vault"}), 400
         # Decrypt the file and update metadata
-        logger.error(f"Record for file {res_id}: {record}")
         success = _decrypt_and_unvault_file(res_id, user, record)
         if not success:
             return jsonify({"success": False, "error": "Failed to decrypt file"}), 500
@@ -900,14 +899,43 @@ def _decrypt_and_unvault_file(file_id, user, record):
 
 @vault_bp.route("/api/vault/files", methods=["GET"])
 def vault_list_files():
-    """List vaulted files. Requires vault unlocked."""
+    """List vaulted files and folders at the requested level. Requires vault unlocked.
+
+    Files and folders are normalized to the same shape the main /api/files
+    endpoint returns, so the dashboard reuses its existing card renderer.
+    Pass ?folder_id=<id> to list a vaulted subfolder; omit it for the root.
+    """
     user, err = require_vault_unlocked()
     if err:
         return err
 
-    from storage_db import list_vaulted_files
-    files = list_vaulted_files(user["id"])
-    return jsonify({"success": True, "files": files}), 200
+    from storage_db import (
+        list_vaulted_files,
+        list_vaulted_folders,
+        count_folder_items,
+    )
+    # file_record_to_api lives in the app entry module. Resolve it from the
+    # already-loaded module ("main" under gunicorn, "__main__" under
+    # `python main.py`) rather than `import main`, which would re-execute the
+    # entry module and duplicate app/route registration.
+    import sys
+    _entry = sys.modules.get("main") or sys.modules.get("__main__")
+    file_record_to_api = _entry.file_record_to_api
+
+    folder_id = request.args.get("folder_id", None, type=int)
+
+    records = list_vaulted_files(user["id"])
+    if folder_id:
+        records = [r for r in records if r.get("folder_id") == folder_id]
+    else:
+        records = [r for r in records if not r.get("folder_id")]
+    files = [file_record_to_api(r) for r in records]
+
+    folders = list_vaulted_folders(user["id"], parent_id=folder_id)
+    for folder in folders:
+        folder["item_count"] = count_folder_items(user["id"], folder["id"])
+
+    return jsonify({"success": True, "files": files, "folders": folders}), 200
 
 @vault_bp.route("/api/vault/folders", methods=["GET"])
 def vault_list_folders():

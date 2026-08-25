@@ -580,6 +580,7 @@ def file_record_to_api(record):
         "mime_type": record.get("mime_type"),
         "is_favorite": bool(record.get("is_favorite", 0)),
         "is_deleted": bool(record.get("is_deleted", 0)),
+        "is_vaulted": bool(record.get("is_vaulted", 0)),
         "deleted_at": record.get("deleted_at"),
         "folder_id": record.get("folder_id"),
     }
@@ -1071,12 +1072,12 @@ def get_files():
             records = [r for r in records if not dict(r).get("folder_id")]
             folders = list_user_folders(user["id"], parent_id=None)
 
-    # Filter out vaulted items from normal/favorites/trash views
-    from vault import vault_is_unlocked
-    vault_open = vault_is_unlocked(user["id"])
-    if not vault_open:
-        records = [r for r in records if not dict(r).get("is_vaulted")]
-        folders = [f for f in folders if not dict(f).get("is_vaulted")]
+    # Vaulted items must NEVER surface in normal / favorites / trash views,
+    # regardless of whether the Vault is currently unlocked. The Vault has its
+    # own dedicated, unlock-gated listing (/api/vault/files). Filtering here
+    # (server-side) keeps the security boundary off the client.
+    records = [r for r in records if not dict(r).get("is_vaulted")]
+    folders = [f for f in folders if not dict(f).get("is_vaulted")]
 
     files = [file_record_to_api(r) for r in records]
 
@@ -1095,7 +1096,7 @@ def get_files():
     end = start + per_page
     files = files[start:end]
 
-    stats = get_file_stats(user["id"], exclude_vaulted=not vault_open)
+    stats = get_file_stats(user["id"], exclude_vaulted=True)
     return jsonify({
         "success": True,
         "files": files,
@@ -1257,7 +1258,13 @@ def preview_file(file_id):
             return jsonify({"success": False, "error": "Vault is locked"}), 403
 
     mime_type = (record.get("mime_type") or "").lower()
-    if not (mime_type.startswith("image/") or mime_type.startswith("video/") or mime_type.startswith("audio/")):
+    is_previewable = (
+        mime_type.startswith("image/")
+        or mime_type.startswith("video/")
+        or mime_type.startswith("audio/")
+        or mime_type == "application/pdf"
+    )
+    if not is_previewable:
         return jsonify({"success": False, "error": "Preview not available for this file type"}), 400
 
     # Get plaintext bytes (handles encryption/decryption and just-in-time encryption for vaulted files)
@@ -2004,10 +2011,9 @@ def list_folders():
             parent_id = None
     folders = list_user_folders(user["id"], parent_id=parent_id)
 
-    from vault import vault_is_unlocked
-    vault_open = vault_is_unlocked(user["id"])
-    if not vault_open:
-        folders = [f for f in folders if not f.get("is_vaulted")]
+    # Vaulted folders never appear in the standard folder listing (e.g. the
+    # move-to-folder picker). They are managed only inside the Vault view.
+    folders = [f for f in folders if not f.get("is_vaulted")]
 
     for folder in folders:
         folder["item_count"] = count_folder_items(user["id"], folder["id"])

@@ -168,6 +168,10 @@ async function bootstrapWorkspace() {
       renderWorkspace();
       renderFolderBar();
       promptForNameIfNeeded();
+      // Fetch authoritative vault status so the sidebar reflects the
+      // configured / locked / unlocked state immediately on load and after any
+      // hard refresh (item G / J). Fire-and-forget: it only updates the nav.
+      checkVaultStatus();
     } finally {
       // Always clear timeouts to prevent leaks
       clearTimeout(profileTimeout);
@@ -396,14 +400,26 @@ function setupContextMenu() {
       if (!card) return;
       e.preventDefault();
       const fileId = parseInt(card.dataset.fileId);
-      const file = state.files.find(f => f.id === fileId);
+      // Resolve from the active collection: My Drive cards live in state.files,
+      // Vault cards live in vaultState.files. This lets vault cards get a menu too.
+      const file = state.files.find(f => f.id === fileId)
+        || (vaultState.files || []).find(f => f.id === fileId);
       if (!file) return;
       state.contextTarget = file;
 
-      const vaultMoveBtn = menu.querySelector('[data-action="vault-move"]');
-      const vaultRestoreBtn = menu.querySelector('[data-action="vault-restore"]');
-      if (vaultMoveBtn) vaultMoveBtn.hidden = !file.is_vaulted;
-      if (vaultRestoreBtn) vaultRestoreBtn.hidden = file.is_vaulted;
+      const isVault = !!file.is_vaulted;
+      const setCtxHidden = (action, hidden) => {
+        const btn = menu.querySelector(`[data-action="${action}"]`);
+        if (btn) btn.hidden = hidden;
+      };
+      // Vault-specific menu (item E): a vaulted file shows "Restore from Vault"
+      // and hides "Move to Vault", "Share" (encrypted content is not shared
+      // through the normal link flow) and "Move to Folder" (the Vault manages
+      // its own folder tree). A My Drive file is the mirror image.
+      setCtxHidden('vault-move', isVault);
+      setCtxHidden('vault-restore', !isVault);
+      setCtxHidden('share', isVault);
+      setCtxHidden('move', isVault);
 
       menu.hidden = false;
       menu.style.left = `${Math.min(e.clientX, window.innerWidth - 200)}px`;
@@ -863,7 +879,7 @@ function renderFileCard(file, isTrash = false) {
     `;
   } else {
     actionsHtml = `
-      <button class="soft-btn small" type="button" data-action="preview">Preview</button>
+      <button class="soft-btn small" type="button" data-action="preview">Open</button>
       <button class="soft-btn small" type="button" data-action="download">Download</button>
       <button class="soft-btn small" type="button" data-action="rename">Rename</button>
       <button class="soft-btn small" type="button" data-action="share">Share</button>
@@ -955,6 +971,32 @@ function handleFileAction(action, file) {
 }
 
 async function vaultMoveFile(file) {
+  // Item D: moving into the Vault requires an unlocked Vault. Verify against the
+  // authoritative backend state (not just cached vaultState), and if locked,
+  // prompt to unlock first rather than bypassing the lock.
+  var status = await checkVaultStatus();
+  if (!status.configured) {
+    showToast('Set up your Vault before moving files into it', 'error');
+    return;
+  }
+  if (!status.unlocked) {
+    var pin = await showPrompt('Unlock Vault', 'Enter your Vault PIN to move this file into the Vault.', 'PIN');
+    if (!pin) return;
+    try {
+      await fetchJSON('/api/vault/unlock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: pin })
+      });
+      vaultState.unlocked = true;
+      vaultState.configured = true;
+      updateVaultNav();
+    } catch (e) {
+      showToast('Invalid Vault PIN', 'error');
+      return;
+    }
+  }
+
   const ok = await showConfirm('Move to Vault?', `"${file.name}" will be hidden and protected.`, 'Move');
   if (!ok) return;
   try {
@@ -962,9 +1004,25 @@ async function vaultMoveFile(file) {
     state.files = state.files.filter(f => f.id !== file.id);
     state.allFiles = state.allFiles.filter(f => f.id !== file.id);
     state.selection.delete(file.id);
+    // Keep the My Drive summary accurate without a full reload (item L).
+    if (state.summary) {
+      state.summary.total_files = Math.max(0, (state.summary.total_files || 0) - 1);
+      state.summary.total_size = Math.max(0, (state.summary.total_size || 0) - (file.size || 0));
+      if (state.summary.categories) {
+        var catKey = file.type === 'image' ? 'images'
+          : file.type === 'video' ? 'videos'
+          : file.type === 'audio' ? 'audio'
+          : file.type === 'document' ? 'documents' : null;
+        if (catKey && state.summary.categories[catKey] != null) {
+          state.summary.categories[catKey] = Math.max(0, state.summary.categories[catKey] - 1);
+        }
+      }
+    }
     renderStats();
     renderWorkspace();
-    showToast('File moved to vault', 'success');
+    // Refresh the Vault listing + sidebar count (item L) without a page reload.
+    await loadVaultData();
+    showToast('File moved to Vault', 'success');
   } catch (error) {
     showToast(error.message || 'Failed to move to vault', 'error');
   }
@@ -985,6 +1043,8 @@ function openPreview(file) {
     body.innerHTML = `${meta}<video src="${previewUrl(file.id)}" controls class="modal-media"></video>`;
   } else if (file.type === 'audio') {
     body.innerHTML = `${meta}<audio src="${previewUrl(file.id)}" controls style="width:100%;margin-top:12px;"></audio>`;
+  } else if ((file.mime_type || '').toLowerCase() === 'application/pdf') {
+    body.innerHTML = `${meta}<iframe src="${previewUrl(file.id)}" title="${escapeHtml(file.name)}" class="modal-media" style="width:100%;height:75vh;border:0;"></iframe>`;
   } else {
     body.innerHTML = `
       ${meta}
@@ -1015,8 +1075,11 @@ async function submitRename(event) {
     state.files = state.files.map(f => f.id === state.renameTarget.id ? { ...f, ...data.file, category: getCategoryFromType(data.file.type) } : f);
     state.allFiles = state.allFiles.map(f => f.id === state.renameTarget.id ? { ...f, ...data.file, category: getCategoryFromType(data.file.type) } : f);
     closeModal('rename-modal');
+    const wasVaultedRename = !!(state.renameTarget && state.renameTarget.is_vaulted);
     state.renameTarget = null;
     renderWorkspace();
+    // A vaulted file is not in state.files, so refresh the Vault view directly.
+    if (wasVaultedRename && state.currentView === 'vault') loadVaultData();
     showToast('File renamed', 'success');
   } catch (error) {
     showToast(error.message || 'Rename failed', 'error');
@@ -1031,6 +1094,8 @@ async function toggleFavorite(file) {
     state.allFiles = state.allFiles.map(f => f.id === file.id ? { ...f, is_favorite: isFav } : f);
     renderWorkspace();
     renderStats();
+    // A vaulted file is not in state.files, so refresh the Vault view directly.
+    if (file.is_vaulted && state.currentView === 'vault') loadVaultData();
     showToast(isFav ? 'Added to favorites' : 'Removed from favorites', 'success');
   } catch (error) {
     showToast(error.message || 'Failed to update favorite', 'error');
@@ -1292,6 +1357,8 @@ async function deleteSingleFile(file) {
     state.selection.delete(file.id);
     renderStats();
     renderWorkspace();
+    // A vaulted file is not in state.files, so refresh the Vault view directly.
+    if (file.is_vaulted && state.currentView === 'vault') loadVaultData();
     showToast('File moved to trash', 'success');
   } catch (error) {
     showToast(error.message || 'Delete failed', 'error');
@@ -2545,7 +2612,7 @@ function renderSiLargestFiles(data) {
     html += '<div class="si-file-meta">' + formatSize(file.size || 0) + '</div>';
     html += '</div>';
     html += '<div class="si-file-actions">';
-    html += '<button class="soft-btn small" type="button" data-action="preview" data-file-id="' + file.id + '" aria-label="Preview ' + escapeHtml(file.filename) + '">Preview</button>';
+    html += '<button class="soft-btn small" type="button" data-action="preview" data-file-id="' + file.id + '" aria-label="Open ' + escapeHtml(file.filename) + '">Open</button>';
     html += '<button class="soft-btn small" type="button" data-action="download" data-file-id="' + file.id + '" aria-label="Download ' + escapeHtml(file.filename) + '">Download</button>';
     html += '</div>';
     html += '</div>';
@@ -2602,7 +2669,7 @@ function renderSiRecentFiles(data) {
     html += '<div class="si-file-meta">' + formatSize(file.size || 0) + ' \u00B7 ' + formatDate(file.uploaded_at) + '</div>';
     html += '</div>';
     html += '<div class="si-file-actions">';
-    html += '<button class="soft-btn small" type="button" data-action="preview" data-file-id="' + file.id + '" aria-label="Preview ' + escapeHtml(file.filename) + '">Preview</button>';
+    html += '<button class="soft-btn small" type="button" data-action="preview" data-file-id="' + file.id + '" aria-label="Open ' + escapeHtml(file.filename) + '">Open</button>';
     html += '<button class="soft-btn small" type="button" data-action="download" data-file-id="' + file.id + '" aria-label="Download ' + escapeHtml(file.filename) + '">Download</button>';
     html += '</div>';
     html += '</div>';
@@ -2683,7 +2750,9 @@ document.addEventListener('DOMContentLoaded', function() {
 document.addEventListener('DOMContentLoaded', setupVaultEventListeners);
 
 async function openVault() {
-  if (state.currentView === 'vault') return;
+  // Intentionally no "already in vault" early-return: re-clicking Vault must
+  // re-fetch authoritative status and re-render so the view/state can never
+  // go stale (item G — refresh on every Vault entry).
   state.currentView = 'vault';
   vaultState.currentFolderId = null;
   document.querySelectorAll('.sidebar-nav .nav-item').forEach(function(b) { b.classList.remove('active'); });
@@ -2717,7 +2786,11 @@ async function checkVaultStatus() {
     updateVaultNav();
     return data;
   } catch (e) {
-    return { configured: false, unlocked: false };
+    // On a transient status failure do NOT assume "not configured" — that would
+    // wrongly route to the Set-Up screen. Preserve the last known state so the
+    // sidebar label and navigation stay consistent (item 7 / G).
+    updateVaultNav();
+    return { configured: vaultState.configured, unlocked: vaultState.unlocked, error: true };
   }
 }
 
@@ -2782,20 +2855,13 @@ function showVaultLockScreen() {
 }
 
 function showVaultUnlocked() {
+  // Show ONLY the dedicated Vault file view. (Previously this incorrectly
+  // rendered the Settings view; the vault file management UI lives in
+  // #vault-view and is populated by loadVaultData()/renderVaultView().)
+  hideAllViews();
   document.getElementById('vault-lock-screen').hidden = true;
   document.getElementById('vault-view').hidden = false;
-  hideAllViews();
-  showMainContent();
-  document.getElementById("settings-view").hidden = false;
-  // Update back button in settings toolbar
-  const settingsBackBtn = document.getElementById("settings-back-btn");
-  if (settingsBackBtn) {
-    settingsBackBtn.textContent = "← Back";
-    settingsBackBtn.onclick = () => {
-      navigateToFiles();
-    };
-  }
-  loadSettingsViewContent();
+  startAutoLockTimer();
 }
 
 async function loadSettingsViewContent() {
@@ -3036,55 +3102,11 @@ function showVaultNotConfigured() {
   }
 }
 
-async function attemptVaultUnlock() {
-  var pinInput = document.getElementById('vault-pin-input');
-  var errorEl = document.getElementById('vault-pin-error');
-  var unlockBtn = document.getElementById('vault-unlock-btn');
-
-  var pin = pinInput.value;
-  if (!pin) {
-    errorEl.hidden = false;
-    return;
-  }
-
-  unlockBtn.disabled = true;
-  unlockBtn.textContent = 'Unlocking...';
-  errorEl.hidden = true;
-
-  try {
-    var data = await fetchJSON('/api/vault/unlock', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pin: pin })
-    });
-    if (data.success) {
-      vaultState.unlocked = true;
-      vaultState.configured = true;
-      updateVaultNav();
-      showVaultUnlocked();
-      await loadVaultData();
-    } else {
-      errorEl.textContent = 'Invalid Vault PIN';
-      errorEl.hidden = false;
-      pinInput.value = '';
-      pinInput.focus();
-    }
-  } catch (e) {
-    errorEl.textContent = 'Invalid Vault PIN';
-    errorEl.hidden = false;
-    pinInput.value = '';
-    pinInput.focus();
-  } finally {
-    unlockBtn.disabled = false;
-    unlockBtn.textContent = 'Unlock';
-  }
-}
-
 async function loadVaultData() {
   try {
-    var url = '/api/files?view=vault';
+    var url = '/api/vault/files';
     if (vaultState.currentFolderId) {
-      url += '&folder_id=' + vaultState.currentFolderId;
+      url += '?folder_id=' + vaultState.currentFolderId;
     }
     var result = await fetchJSON(url);
     vaultState.files = normalizeFiles(result.files || []);
@@ -3148,10 +3170,14 @@ function renderVaultView() {
       '</div>' +
       '<div class="file-actions folder-actions">' +
         '<button class="soft-btn small folder-open-btn" type="button">Open</button>' +
-        '<button class="soft-btn small vault-restore-folder-btn" type="button">Restore</button>' +
+        '<button class="soft-btn small folder-history-btn" type="button" title="History">&#128339;</button>' +
+        '<button class="soft-btn small vault-restore-folder-btn" type="button" title="Restore to My Drive">&#128275;</button>' +
+        '<button class="soft-btn small danger-btn folder-delete-btn" type="button" title="Delete">&#128465;</button>' +
       '</div>';
     card.querySelector('.folder-open-btn').addEventListener('click', function() { navigateVaultFolder(folder.id); });
+    card.querySelector('.folder-history-btn').addEventListener('click', function() { openHistoryModal('folder', folder.id, folder.name); });
     card.querySelector('.vault-restore-folder-btn').addEventListener('click', function() { vaultRestoreFolder(folder.id, folder.name); });
+    card.querySelector('.folder-delete-btn').addEventListener('click', function() { vaultDeleteFolder(folder.id, folder.name); });
     card.addEventListener('dblclick', function() { navigateVaultFolder(folder.id); });
     fragment.appendChild(card);
   });
@@ -3170,43 +3196,37 @@ function renderVaultFileCard(file) {
 
   var glyph = fileGlyph(file.category);
   var isImage = file.type === 'image';
-  var isVideo = file.type === 'video';
-  var isAudio = file.type === 'audio';
+  var favClass = file.is_favorite ? ' favorite' : '';
 
   var mediaContent = '';
   if (isImage) {
     mediaContent = '<img src="' + previewUrl(file.id) + '" alt="' + escapeHtml(file.name) + '" class="file-thumb" loading="lazy">';
-  } else if (isVideo) {
-    mediaContent = '<div class="file-glyph">' + glyph + '</div>';
   } else {
     mediaContent = '<div class="file-glyph">' + glyph + '</div>';
   }
 
   article.innerHTML =
-    '<div class="file-media">' + mediaContent + '</div>' +
+    '<div class="file-media' + favClass + '">' + mediaContent + '</div>' +
     '<div class="file-info">' +
       '<div class="file-name" title="' + escapeHtml(file.name) + '">' + escapeHtml(file.name) + '</div>' +
       '<div class="file-meta">' + formatSize(file.size || 0) + ' &middot; ' + formatDate(file.date) + '</div>' +
     '</div>' +
     '<div class="file-actions">' +
-      '<button class="soft-btn small" type="button" data-action="preview" title="Preview">&#128269;</button>' +
+      '<button class="soft-btn small" type="button" data-action="preview" title="Open">&#128269;</button>' +
       '<button class="soft-btn small" type="button" data-action="download" title="Download">&#11015;</button>' +
+      '<button class="soft-btn small" type="button" data-action="rename" title="Rename">&#9998;</button>' +
+      '<button class="soft-btn small" type="button" data-action="history" title="History">&#128339;</button>' +
+      '<button class="soft-btn small" type="button" data-action="favorite" title="' + (file.is_favorite ? 'Unfavorite' : 'Favorite') + '">&#9733;</button>' +
       '<button class="soft-btn small" type="button" data-action="vault-restore" title="Restore to My Drive">&#128275;</button>' +
+      '<button class="soft-btn small danger-btn" type="button" data-action="delete" title="Delete">&#128465;</button>' +
     '</div>';
 
-  article.querySelector('[data-action="preview"]').addEventListener('click', function() { openPreview(file); });
-  article.querySelector('[data-action="download"]').addEventListener('click', function() {
-    showDownloadIndicator(file.name);
-    var a = document.createElement('a');
-    a.href = downloadUrl(file.id);
-    a.download = file.name;
-    a.style.display = 'none';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(hideDownloadIndicator, 5000);
+  article.querySelectorAll('[data-action]').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      handleFileAction(btn.dataset.action, file);
+    });
   });
-  article.querySelector('[data-action="vault-restore"]').addEventListener('click', function() { vaultRestoreFile(file); });
 
   return article;
 }
@@ -3341,6 +3361,18 @@ async function vaultRestoreFolder(folderId, folderName) {
   }
 }
 
+async function vaultDeleteFolder(folderId, folderName) {
+  var ok = await showConfirm('Delete folder?', '"' + folderName + '" and all its contents will be moved to trash.', 'Delete');
+  if (!ok) return;
+  try {
+    await fetchJSON('/api/folders/' + folderId + '/delete', { method: 'DELETE' });
+    showToast('Folder moved to trash', 'success');
+    await loadVaultData();
+  } catch (e) {
+    showToast(e.message || 'Failed to delete folder', 'error');
+  }
+}
+
 async function lockVaultConfirm() {
   var ok = await showConfirm('Lock Vault?', 'This will immediately hide your private files.', 'Lock Everything');
   if (!ok) return;
@@ -3417,18 +3449,34 @@ function navigateToFiles() {
 
 async function handleVaultUpload(files) {
   if (!files.length) return;
+  // Upload-then-move (item Q): the file is first stored via the normal upload
+  // path, then immediately moved into the Vault, where the existing server-side
+  // crypto in /api/vault/move encrypts it. No new upload-crypto path is added.
+  if (!vaultState.unlocked) {
+    showToast('Unlock the Vault before uploading', 'error');
+    return;
+  }
   for (var i = 0; i < files.length; i++) {
     var file = files[i];
     var formData = new FormData();
     formData.append('file', file);
-    if (vaultState.currentFolderId) {
-      formData.append('folder_id', vaultState.currentFolderId);
-    }
     try {
-      await fetchJSON('/api/files/upload', { method: 'POST', body: formData });
-      showToast('Uploaded ' + file.name, 'success');
+      // Step 1: upload to My Drive root (no folder_id — the Vault manages its
+      // own tree and /api/vault/move places the file at the Vault root).
+      var up = await fetchJSON('/api/files/upload', { method: 'POST', body: formData });
+      var newId = up.file && up.file.id;
+      if (!newId) throw new Error('Upload returned no file id');
+      // Step 2: move + encrypt + vault it immediately.
+      await fetchJSON('/api/vault/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'file', id: newId })
+      });
+      showToast('Added ' + file.name + ' to Vault', 'success');
     } catch (e) {
-      showToast(e.message || 'Upload failed', 'error');
+      // If the upload succeeded but the move failed, the file is sitting in My
+      // Drive un-encrypted — say so plainly rather than implying it is secured.
+      showToast((e.message || 'Vault upload failed') + ' (' + file.name + ')', 'error');
     }
   }
   await loadVaultData();
