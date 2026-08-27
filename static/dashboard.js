@@ -422,8 +422,10 @@ function setupContextMenu() {
       setCtxHidden('move', isVault);
 
       menu.hidden = false;
-      menu.style.left = `${Math.min(e.clientX, window.innerWidth - 200)}px`;
-      menu.style.top = `${Math.min(e.clientY, window.innerHeight - 250)}px`;
+      const left = Math.max(0, Math.min(e.clientX, window.innerWidth - 200));
+      const top = Math.max(0, Math.min(e.clientY, window.innerHeight - 250));
+      menu.style.left = `${left}px`;
+      menu.style.top = `${top}px`;
     } catch (err) {
       console.error('Context menu error:', err);
       menu.hidden = true;
