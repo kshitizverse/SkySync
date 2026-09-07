@@ -38,7 +38,6 @@ from storage_db import (
     reset_vault_failed_attempts,
     update_vault_pin,
     update_vault_encryption,
-    get_file_record,
     update_file_encryption,
     utcnow_iso,
 )
@@ -550,22 +549,30 @@ def get_vault_plaintext(file_id, user_id):
     """Return plaintext bytes for a file, handling encryption/decryption as needed.
     Returns None if unable.
     """
-    record = get_file_record(file_id, user_id)
+    from storage_db import get_user_file_record, get_user_by_id
+    from telegram_handler import create_telegram_handler_for_user
+
+    record = get_user_file_record(file_id, user_id)
     if not record:
         return None
+
+    user = get_user_by_id(user_id)
+    if not user:
+        logger.error(f"User {user_id} not found for plaintext retrieval")
+        return None
+
     if not record.get("is_vaulted"):
         # Not vaulted, just download and return
-        from telegram_handler import create_telegram_handler_for_user
-        handler = create_telegram_handler_for_user({"id": user_id})
+        handler = create_telegram_handler_for_user(user)
         if handler is None:
             logger.error(f"Failed to get telegram handler for user {user_id}")
             return None
         return handler.download_file(record["telegram_message_id"])
+
     # File is vaulted
     if record.get("enc_flag") == 1:
         # Encrypted: download encrypted blob, decrypt with VMK, return plaintext
-        from telegram_handler import create_telegram_handler_for_user
-        handler = create_telegram_handler_for_user({"id": user_id})
+        handler = create_telegram_handler_for_user(user)
         if handler is None:
             logger.error(f"Failed to get telegram handler for user {user_id}")
             return None
@@ -586,8 +593,7 @@ def get_vault_plaintext(file_id, user_id):
             return None
     else:
         # Vaulted but not encrypted (plaintext in Telegram). Need to encrypt just-in-time.
-        from telegram_handler import create_telegram_handler_for_user
-        handler = create_telegram_handler_for_user({"id": user_id})
+        handler = create_telegram_handler_for_user(user)
         if handler is None:
             logger.error(f"Failed to get telegram handler for user {user_id}")
             return None
@@ -595,16 +601,114 @@ def get_vault_plaintext(file_id, user_id):
         if plaintext is None:
             return None
         # Encrypt and upload just-in-time
-        success = _encrypt_and_vault_file(file_id, user_id, record)
+        success = _encrypt_and_vault_file(file_id, user, record)
         if not success:
             logger.error(f"Failed to encrypt vaulted file {file_id} just-in-time")
-            # Even if encryption failed, we return the plaintext we already have
-            # so the user can still access the file. The file remains unencrypted in Telegram.
         return plaintext
 
 # ---------------------------------------------------------------------------
 # Vault file/folder operations
 # ---------------------------------------------------------------------------
+
+@vault_bp.route("/api/vault/upload", methods=["POST"])
+def vault_upload():
+    """Upload a file directly into the Vault (atomic: upload + encrypt + vault).
+
+    Accepts multipart/form-data with a 'file' field.
+    Optional form field: 'folder_id' to place inside a vaulted subfolder.
+    Requires: authenticated + vault unlocked.
+    """
+    user, err = require_vault_unlocked()
+    if err:
+        return err
+
+    if "file" not in request.files:
+        return jsonify({"success": False, "error": "No file provided"}), 400
+
+    file = request.files["file"]
+    if not file.filename:
+        return jsonify({"success": False, "error": "No file selected"}), 400
+
+    import sys as _sys
+    import tempfile
+    _main_mod = _sys.modules.get("main") or _sys.modules.get("__main__")
+    safe_name = _main_mod.sanitize_filename(file.filename)
+
+    cached = create_telegram_handler_for_user_from_vault(user)
+    if not cached:
+        return jsonify({"success": False, "error": "Telegram storage is not configured"}), 503
+
+    os.makedirs("uploads", exist_ok=True)
+    extension = os.path.splitext(safe_name)[1]
+    temp_file = tempfile.NamedTemporaryFile(delete=False, dir="uploads", suffix=extension)
+    temp_path = temp_file.name
+    temp_file.close()
+    file.save(temp_path)
+
+    try:
+        file_size = os.path.getsize(temp_path)
+        max_size = current_app.config.get("MAX_CONTENT_LENGTH", 100 * 1024 * 1024)
+        if file_size > max_size:
+            return jsonify({"success": False, "error": f"File exceeds the {max_size // (1024*1024)} MB upload limit"}), 413
+
+        from telegram_handler import run_telegram_op
+        from storage_db import create_file_record, vault_file, move_file_to_folder, get_user_file_record as _get_user_file_record
+        upload_result = run_telegram_op(cached, cached.handler.send_file(temp_path, caption=f"Vault upload by user"))
+        if not upload_result or not upload_result.get("message_id"):
+            return jsonify({"success": False, "error": "Telegram upload failed"}), 500
+
+        record = create_file_record(
+            user_id=user["id"],
+            telegram_message_id=upload_result["message_id"],
+            filename=safe_name,
+            mime_type=file.mimetype,
+            size=file_size,
+        )
+
+        # Encrypt + vault the file immediately
+        success = _encrypt_and_vault_file(record["id"], user, record)
+        if not success:
+            return jsonify({"success": False, "error": "Failed to encrypt file for Vault"}), 500
+        vault_file(record["id"], user["id"])
+
+        # Optional folder placement
+        folder_id = request.form.get("folder_id") or request.args.get("folder_id")
+        if folder_id:
+            try:
+                move_file_to_folder(record["id"], user["id"], int(folder_id))
+            except (ValueError, TypeError):
+                pass
+
+        from storage_db import record_activity
+        record_activity(
+            user["id"], "VAULT_FILE_UPLOADED", resource_type="file", resource_id=record["id"],
+            metadata={"filename": safe_name, "size": file_size, "mime_type": file.mimetype},
+        )
+
+        # Refresh record
+        record = _get_user_file_record(record["id"], user["id"])
+        import sys
+        _entry = sys.modules.get("main") or sys.modules.get("__main__")
+        file_record_to_api = _entry.file_record_to_api
+
+        return jsonify({
+            "success": True,
+            "message": f"File {safe_name} uploaded to Vault",
+            "file": file_record_to_api(record),
+        }), 201
+    except Exception as exc:
+        logger.error("Vault upload failed: %s", exc)
+        return jsonify({"success": False, "error": "Vault upload failed"}), 500
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+
+def create_telegram_handler_for_user_from_vault(user):
+    """Create a telegram handler from within the vault module."""
+    from telegram_handler import create_telegram_handler_for_user
+    return create_telegram_handler_for_user(user)
+
 
 @vault_bp.route("/api/vault/move", methods=["POST"])
 def vault_move():

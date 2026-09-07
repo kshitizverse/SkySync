@@ -3557,9 +3557,6 @@ function navigateToFiles() {
 
 async function handleVaultUpload(files) {
   if (!files.length) return;
-  // Upload-then-move (item Q): the file is first stored via the normal upload
-  // path, then immediately moved into the Vault, where the existing server-side
-  // crypto in /api/vault/move encrypts it. No new upload-crypto path is added.
   if (!vaultState.unlocked) {
     showToast('Unlock the Vault before uploading', 'error');
     return;
@@ -3568,22 +3565,13 @@ async function handleVaultUpload(files) {
     var file = files[i];
     var formData = new FormData();
     formData.append('file', file);
+    if (vaultState.currentFolderId) {
+      formData.append('folder_id', vaultState.currentFolderId);
+    }
     try {
-      // Step 1: upload to My Drive root (no folder_id — the Vault manages its
-      // own tree and /api/vault/move places the file at the Vault root).
-      var up = await fetchJSON('/api/files/upload', { method: 'POST', body: formData });
-      var newId = up.file && up.file.id;
-      if (!newId) throw new Error('Upload returned no file id');
-      // Step 2: move + encrypt + vault it immediately.
-      await fetchJSON('/api/vault/move', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'file', id: parseInt(newId, 10) })
-      });
+      await fetchJSON('/api/vault/upload', { method: 'POST', body: formData });
       showToast('Added ' + file.name + ' to Vault', 'success');
     } catch (e) {
-      // If the upload succeeded but the move failed, the file is sitting in My
-      // Drive un-encrypted — say so plainly rather than implying it is secured.
       showToast((e.message || 'Vault upload failed') + ' (' + file.name + ')', 'error');
     }
   }
