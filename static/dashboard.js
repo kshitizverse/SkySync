@@ -422,10 +422,25 @@ function setupContextMenu() {
       setCtxHidden('move', isVault);
 
       menu.hidden = false;
-      const left = Math.max(0, Math.min(e.clientX, window.innerWidth - 200));
-      const top = Math.max(0, Math.min(e.clientY, window.innerHeight - 250));
-      menu.style.left = `${left}px`;
-      menu.style.top = `${top}px`;
+      // Measure the actual menu dimensions after rendering
+      var menuRect = menu.getBoundingClientRect();
+      var menuW = menuRect.width || 200;
+      var menuH = menuRect.height || 300;
+      var viewW = window.innerWidth;
+      var viewH = window.innerHeight;
+      var scrollX = window.pageXOffset || document.documentElement.scrollLeft;
+      var scrollY = window.pageYOffset || document.documentElement.scrollTop;
+
+      // Start at cursor, then clamp so the entire menu stays within viewport
+      var left = e.clientX;
+      var top = e.clientY;
+      if (left + menuW > viewW) left = Math.max(0, viewW - menuW - 4);
+      if (top + menuH > viewH) top = Math.max(0, viewH - menuH - 4);
+      if (left < 0) left = 0;
+      if (top < 0) top = 0;
+
+      menu.style.left = left + 'px';
+      menu.style.top = top + 'px';
     } catch (err) {
       console.error('Context menu error:', err);
       menu.hidden = true;
@@ -452,6 +467,8 @@ function setupKeyboardShortcuts() {
       closeModal('share-modal');
       closeModal('modal-move');
       closeModal('edit-name-modal');
+      var ctxMenu = document.getElementById('context-menu');
+      if (ctxMenu) { ctxMenu.hidden = true; state.contextTarget = null; }
       closeSidebar();
       clearSelection();
     }
@@ -1002,7 +1019,7 @@ async function vaultMoveFile(file) {
   const ok = await showConfirm('Move to Vault?', `"${file.name}" will be hidden and protected.`, 'Move');
   if (!ok) return;
   try {
-    await fetchJSON('/api/vault/move', { method: 'POST', body: JSON.stringify({ type: 'file', id: file.id }) });
+    await fetchJSON('/api/vault/move', { method: 'POST', body: JSON.stringify({ type: 'file', id: parseInt(file.id, 10) }) });
     state.files = state.files.filter(f => f.id !== file.id);
     state.allFiles = state.allFiles.filter(f => f.id !== file.id);
     state.selection.delete(file.id);
@@ -1034,30 +1051,66 @@ function openPreview(file) {
   const body = document.getElementById('preview-modal-body');
   const meta = `
     <div class="preview-meta">
-      <h3>${escapeHtml(file.name)}</h3>
-      <p>${formatTypeLabel(file.type)} \u00B7 ${formatSize(file.size || 0)} \u00B7 ${escapeHtml(file.mime_type || 'Unknown')}</p>
+      <div class="preview-meta-info">
+        <h3>${escapeHtml(file.name)}</h3>
+        <p>${formatTypeLabel(file.type)} \u00B7 ${formatSize(file.size || 0)} \u00B7 ${escapeHtml(file.mime_type || 'Unknown')}</p>
+      </div>
+      <div class="preview-meta-actions">
+        <button class="soft-btn small preview-download-btn" type="button" data-file-id="${file.id}" data-file-name="${escapeHtml(file.name)}">&#11015; Download</button>
+      </div>
     </div>
   `;
 
   if (file.type === 'image') {
-    body.innerHTML = `${meta}<img src="${previewUrl(file.id)}" alt="${escapeHtml(file.name)}" class="modal-media">`;
+    body.innerHTML = `${meta}<div class="preview-image-container"><img src="${previewUrl(file.id)}" alt="${escapeHtml(file.name)}" class="modal-media preview-image" id="preview-media-content"></div>`;
+    var img = body.querySelector('.preview-image');
+    img.addEventListener('error', function() {
+      this.style.display = 'none';
+      var container = this.parentElement;
+      container.innerHTML = '<div class="document-fallback"><div class="file-glyph large">IMG</div><p>Unable to load image preview.</p></div>';
+    });
   } else if (file.type === 'video') {
-    body.innerHTML = `${meta}<video src="${previewUrl(file.id)}" controls class="modal-media"></video>`;
+    body.innerHTML = `${meta}<div class="preview-video-container"><video src="${previewUrl(file.id)}" controls class="modal-media preview-video" id="preview-media-content"></video></div>`;
+    var vid = body.querySelector('.preview-video');
+    vid.addEventListener('error', function() {
+      this.style.display = 'none';
+      var container = this.parentElement;
+      container.innerHTML = '<div class="document-fallback"><div class="file-glyph large">VID</div><p>Unable to load video preview.</p></div>';
+    });
   } else if (file.type === 'audio') {
-    body.innerHTML = `${meta}<audio src="${previewUrl(file.id)}" controls style="width:100%;margin-top:12px;"></audio>`;
+    body.innerHTML = `${meta}<div class="preview-audio-container"><div class="file-glyph large">AUD</div><audio src="${previewUrl(file.id)}" controls style="width:100%;margin-top:12px;" id="preview-media-content"></audio></div>`;
   } else if ((file.mime_type || '').toLowerCase() === 'application/pdf') {
-    body.innerHTML = `${meta}<iframe src="${previewUrl(file.id)}" title="${escapeHtml(file.name)}" class="modal-media" style="width:100%;height:75vh;border:0;"></iframe>`;
+    body.innerHTML = `${meta}<div class="preview-pdf-container"><iframe src="${previewUrl(file.id)}" title="${escapeHtml(file.name)}" class="modal-media preview-pdf" id="preview-media-content"></iframe></div>`;
+    var iframe = body.querySelector('.preview-pdf');
+    iframe.addEventListener('error', function() {
+      this.style.display = 'none';
+      var container = this.parentElement;
+      container.innerHTML = '<div class="document-fallback"><div class="file-glyph large">PDF</div><p>Unable to load PDF preview.</p></div>';
+    });
   } else {
     body.innerHTML = `
       ${meta}
       <div class="document-fallback">
         <div class="file-glyph large">${fileGlyph(file.type)}</div>
-        <p>Preview is available for images, videos, and audio files.</p>
-        <button class="primary-btn doc-download-btn">Download file</button>
+        <p>Preview is not available for this file type.</p>
+        <p class="preview-fallback-hint">Download the file to view it with a compatible application.</p>
       </div>
     `;
-    body.querySelector('.doc-download-btn').addEventListener('click', () => { window.location.href = downloadUrl(file.id); });
   }
+
+  var dlBtn = body.querySelector('.preview-download-btn');
+  if (dlBtn) {
+    dlBtn.addEventListener('click', function() {
+      var a = document.createElement('a');
+      a.href = downloadUrl(this.dataset.fileId);
+      a.download = this.dataset.fileName;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    });
+  }
+
   openModal('preview-modal');
 }
 
@@ -2224,6 +2277,51 @@ function setupActivityListeners() {
 function openWebDAVSettings() {
   openModal('webdav-modal');
   loadWebDAVTokens();
+  populateWebDAVConnectionDetails();
+}
+
+function populateWebDAVConnectionDetails() {
+  var user = state.profile || {};
+  var webdavUrl = window.location.origin + '/webdav/';
+  var username = user.id || user.telegram_id || 'your-user-id';
+
+  document.getElementById('webdav-url-value').textContent = webdavUrl;
+  document.getElementById('webdav-username-value').textContent = username;
+  document.getElementById('webdav-password-value').textContent = '********';
+  document.getElementById('webdav-password-value').dataset.realToken = '';
+  document.getElementById('webdav-connection-details').hidden = false;
+
+  // Copy buttons
+  document.querySelectorAll('.webdav-copy-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var targetId = this.dataset.copyTarget;
+      var target = document.getElementById(targetId);
+      if (!target) return;
+      var text = target.dataset.realToken || target.textContent;
+      if (text === '********' || !text) {
+        showToast('No token to copy. Generate one first.', 'warning');
+        return;
+      }
+      navigator.clipboard.writeText(text)
+        .then(function() { showToast('Copied to clipboard', 'success'); })
+        .catch(function() { showToast('Failed to copy', 'error'); });
+    });
+  });
+
+  // Reveal/Hide button
+  var revealBtn = document.querySelector('.webdav-reveal-btn');
+  if (revealBtn) {
+    revealBtn.addEventListener('click', function() {
+      var pwEl = document.getElementById('webdav-password-value');
+      if (pwEl.textContent === '********' && pwEl.dataset.realToken) {
+        pwEl.textContent = pwEl.dataset.realToken;
+        this.innerHTML = '&#128064;';
+      } else {
+        pwEl.textContent = '********';
+        this.innerHTML = '&#128065;';
+      }
+    });
+  }
 }
 
 function loadWebDAVTokens() {
@@ -2274,19 +2372,23 @@ function createWebDAVToken() {
 }
 
 function showWebDAVTokenCreated(token, label) {
-  const container = document.getElementById('webdav-token-list');
+  var container = document.getElementById('webdav-token-list');
   if (!container) return;
-  const user = state.profile || {};
-  const webdavUrl = (user.webdav_url || (window.location.origin + '/webdav/'));
+
+  // Update the password field with the real token
+  var pwEl = document.getElementById('webdav-password-value');
+  if (pwEl) {
+    pwEl.textContent = token;
+    pwEl.dataset.realToken = token;
+  }
+
   container.innerHTML = `
     <div class="webdav-token-created">
-      <div class="webdav-instructions">
-        <h4>Connect with WebDAV</h4>
-        <p><strong>Server:</strong> ${webdavUrl}</p>
-        <p><strong>Username:</strong> Your user ID</p>
-        <p><strong>Password (token):</strong> <code class="token-code">${escapeHtml(token)}</code></p>
-        <p>Copy this token now — it will not be shown again.</p>
+      <div class="webdav-token-created-header">
+        <span class="chip success">Token Created</span>
+        <span class="webdav-token-label">${escapeHtml(label)}</span>
       </div>
+      <p>Copy this token now — it will not be shown again for security reasons.</p>
     </div>
   `;
   loadWebDAVTokens();
@@ -2979,6 +3081,7 @@ async function loadSettingsViewContent() {
 
           try {
             await fetchJSON('/api/vault/lock', { method: 'POST' });
+            forceVaultLock();
             showToast('Vault locked', 'success');
             // Refresh the view
             loadSettingsViewContent();
@@ -3016,6 +3119,9 @@ async function loadSettingsViewContent() {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ pin: pin })
             });
+            vaultState.unlocked = true;
+            vaultState.configured = true;
+            updateVaultNav();
             showToast('Vault unlocked successfully', 'success');
             // Refresh the view
             loadSettingsViewContent();
@@ -3338,7 +3444,7 @@ async function vaultRestoreFile(file) {
     await fetchJSON('/api/vault/restore', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'file', id: file.id })
+      body: JSON.stringify({ type: 'file', id: parseInt(file.id, 10) })
     });
     showToast('Restored to My Drive', 'success');
     await loadVaultData();
@@ -3354,7 +3460,7 @@ async function vaultRestoreFolder(folderId, folderName) {
     await fetchJSON('/api/vault/restore', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'folder', id: folderId })
+      body: JSON.stringify({ type: 'folder', id: parseInt(folderId, 10) })
     });
     showToast('Restored to My Drive', 'success');
     await loadVaultData();
@@ -3472,7 +3578,7 @@ async function handleVaultUpload(files) {
       await fetchJSON('/api/vault/move', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'file', id: newId })
+        body: JSON.stringify({ type: 'file', id: parseInt(newId, 10) })
       });
       showToast('Added ' + file.name + ' to Vault', 'success');
     } catch (e) {

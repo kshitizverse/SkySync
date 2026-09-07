@@ -621,7 +621,14 @@ def vault_move():
     res_type = data.get("type", "")
     res_id = data.get("id")
 
-    if res_type not in ("file", "folder") or not isinstance(res_id, int):
+    # Accept int or string-encoded int for id
+    if isinstance(res_id, str):
+        try:
+            res_id = int(res_id)
+        except (ValueError, TypeError):
+            res_id = None
+
+    if res_type not in ("file", "folder") or not isinstance(res_id, int) or res_id < 1:
         return jsonify({"success": False, "error": "Invalid request: type must be 'file' or 'folder', id must be integer"}), 400
 
     if res_type == "file":
@@ -773,7 +780,14 @@ def vault_restore():
     res_type = data.get("type", "")
     res_id = data.get("id")
 
-    if res_type not in ("file", "folder") or not isinstance(res_id, int):
+    # Accept int or string-encoded int for id
+    if isinstance(res_id, str):
+        try:
+            res_id = int(res_id)
+        except (ValueError, TypeError):
+            res_id = None
+
+    if res_type not in ("file", "folder") or not isinstance(res_id, int) or res_id < 1:
         return jsonify({"success": False, "error": "Invalid request: type must be 'file' or 'folder', id must be integer"}), 400
 
     if res_type == "file":

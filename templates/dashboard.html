@@ -646,13 +646,57 @@
 
       <!-- WebDAV Settings Modal -->
       <div class="modal-backdrop" id="webdav-modal" hidden role="dialog" aria-modal="true" aria-label="WebDAV Settings">
-        <div class="modal-card compact-card">
+        <div class="modal-card compact-card webdav-modal-card">
           <div class="modal-heading">
-            <h3>WebDAV Access</h3>
-            <p>Connect to SkySync via WebDAV from Windows Explorer or any WebDAV client.</p>
+            <h3>&#128194; WebDAV Access</h3>
+            <p>Connect to your SkySync files from any WebDAV client.</p>
           </div>
           <div id="webdav-token-list" class="webdav-token-list">
             <p>Generating token list...</p>
+          </div>
+          <div class="webdav-info-section" id="webdav-info-section">
+            <div class="webdav-info-card">
+              <h4>What is WebDAV?</h4>
+              <p>WebDAV lets you access your SkySync files directly from Windows File Explorer, macOS Finder, or any WebDAV-compatible app. It works like a network drive.</p>
+            </div>
+            <div class="webdav-connection-details" id="webdav-connection-details" hidden>
+              <h4>Connection Details</h4>
+              <div class="webdav-field">
+                <label>WebDAV URL</label>
+                <div class="webdav-field-row">
+                  <code class="webdav-field-value" id="webdav-url-value"></code>
+                  <button class="soft-btn small webdav-copy-btn" type="button" data-copy-target="webdav-url-value" title="Copy URL">&#128203;</button>
+                </div>
+              </div>
+              <div class="webdav-field">
+                <label>Username</label>
+                <div class="webdav-field-row">
+                  <code class="webdav-field-value" id="webdav-username-value"></code>
+                  <button class="soft-btn small webdav-copy-btn" type="button" data-copy-target="webdav-username-value" title="Copy username">&#128203;</button>
+                </div>
+              </div>
+              <div class="webdav-field">
+                <label>Password / Access Token</label>
+                <div class="webdav-field-row">
+                  <code class="webdav-field-value" id="webdav-password-value">********</code>
+                  <button class="soft-btn small webdav-copy-btn" type="button" data-copy-target="webdav-password-value" title="Copy password">&#128203;</button>
+                  <button class="soft-btn small webdav-reveal-btn" type="button" title="Reveal/Hide">&#128065;</button>
+                </div>
+              </div>
+            </div>
+            <div class="webdav-instructions">
+              <h4>How to connect on Windows</h4>
+              <ol>
+                <li>Open File Explorer</li>
+                <li>Right-click <strong>This PC</strong> and select <strong>Add a network location</strong></li>
+                <li>Click <strong>Next</strong>, then <strong>Choose a custom network location</strong></li>
+                <li>Enter the <strong>WebDAV URL</strong> shown above</li>
+                <li>Enter your <strong>Username</strong> and <strong>Access Token</strong></li>
+                <li>Give it a name and click <strong>Finish</strong></li>
+              </ol>
+              <h4>Other clients</h4>
+              <p>You can also connect from macOS Finder (Connect to Server), Linux (davfs2), or any WebDAV-compatible application using the URL, username, and token above.</p>
+            </div>
           </div>
           <div class="modal-actions">
             <button class="soft-btn" data-close-modal="webdav-modal" type="button">Close</button>

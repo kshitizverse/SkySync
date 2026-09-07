@@ -1288,12 +1288,15 @@ def preview_file(file_id):
         user["id"], "FILE_PREVIEWED", resource_type="file", resource_id=file_id,
         metadata={"filename": record["filename"]},
     )
-    return send_file(
-        preview_path,
-        mimetype=record.get("mime_type") or None,
-        as_attachment=False,
-        download_name=record["filename"],
-    )
+    from flask import Response
+    with open(preview_path, "rb") as f:
+        data = f.read()
+    mime = record.get("mime_type") or "application/octet-stream"
+    resp = Response(data, mimetype=mime)
+    resp.headers["Content-Disposition"] = "inline"
+    resp.headers["Cache-Control"] = "private, max-age=3600"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
 
 
 @app.route("/api/files/<int:file_id>/delete", methods=["DELETE"])
