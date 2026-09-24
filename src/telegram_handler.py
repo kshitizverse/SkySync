@@ -124,6 +124,27 @@ class _CachedHandler:
                 return await self.handler.send_file(file_path, caption)
             return self.user_loop.run_sync(operation())
 
+    def delete_message(self, message_id):
+        """Synchronously delete a message from Telegram."""
+        if os.getenv('TELEGRAM_TEST_MODE'):
+            # Mirror production: deleting a message also removes its bytes.
+            # Best effort — a missing file is not an error.
+            try:
+                session_path = getattr(self.handler, 'session_path', None)
+                if session_path:
+                    session_test_dir = os.path.join(
+                        TEST_STORAGE_BASE, os.path.basename(session_path))
+                    test_file = os.path.join(session_test_dir, str(message_id))
+                    if os.path.exists(test_file):
+                        os.remove(test_file)
+            except OSError:
+                pass
+            return True
+        with self.lock:
+            async def operation():
+                return await self.handler.delete_message(message_id)
+            return self.user_loop.run_sync(operation())
+
 
 # Module-level cache: user_id -> _CachedHandler
 _handler_cache: dict[int, _CachedHandler] = {}

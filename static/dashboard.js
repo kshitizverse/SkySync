@@ -1019,7 +1019,7 @@ async function vaultMoveFile(file) {
   const ok = await showConfirm('Move to Vault?', `"${file.name}" will be hidden and protected.`, 'Move');
   if (!ok) return;
   try {
-    await fetchJSON('/api/vault/move', { method: 'POST', body: JSON.stringify({ type: 'file', id: parseInt(file.id, 10) }) });
+    await fetchJSON('/api/vault/move', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'file', id: parseInt(file.id, 10) }) });
     state.files = state.files.filter(f => f.id !== file.id);
     state.allFiles = state.allFiles.filter(f => f.id !== file.id);
     state.selection.delete(file.id);
@@ -2945,11 +2945,43 @@ function showMainContent() {
   }
 }
 
+// Canonical lock-card markup (must match templates/dashboard.html). Rebuilt
+// dynamically because showVaultNotConfigured() replaces the card content and
+// permanently removes #vault-pin-form; without restoring it the Vault stays
+// unlockable in the same page session (and its view/Upload button unreachable).
+var VAULT_LOCK_CARD_HTML =
+  '<div class="vault-lock-icon">&#128274;</div>' +
+  '<h2 class="vault-lock-title">Vault Locked</h2>' +
+  '<p class="vault-lock-desc">Your private files are protected.</p>' +
+  '<form id="vault-pin-form" novalidate>' +
+    '<label class="vault-pin-label" for="vault-pin-input">Vault PIN</label>' +
+    '<input type="password" id="vault-pin-input" class="vault-pin-input" maxlength="128" autocomplete="off" inputmode="numeric" placeholder="Enter your PIN" aria-label="Vault PIN" required>' +
+    '<div class="vault-pin-error" id="vault-pin-error" role="alert" hidden>Invalid Vault PIN</div>' +
+    '<button type="submit" class="primary-btn vault-unlock-btn" id="vault-unlock-btn">Unlock</button>' +
+  '</form>';
+
 function showVaultLockScreen() {
   document.getElementById('vault-view').hidden = true;
   var lockScreen = document.getElementById('vault-lock-screen');
   lockScreen.hidden = false;
   var pinInput = document.getElementById('vault-pin-input');
+  if (!pinInput) {
+    // The card was replaced by showVaultNotConfigured() (no PIN form).
+    // Restore the canonical lock card so the user can unlock after setting
+    // up their PIN — otherwise the lock screen is a dead end.
+    var card = lockScreen.querySelector('.vault-lock-card');
+    if (card) {
+      card.innerHTML = VAULT_LOCK_CARD_HTML;
+      var form = document.getElementById('vault-pin-form');
+      if (form) {
+        form.addEventListener('submit', function(e) {
+          e.preventDefault();
+          attemptVaultUnlock();
+        });
+      }
+    }
+    pinInput = document.getElementById('vault-pin-input');
+  }
   if (pinInput) {
     pinInput.value = '';
     pinInput.focus();

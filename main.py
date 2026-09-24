@@ -446,7 +446,11 @@ def before_request():
 @app.after_request
 def add_security_headers(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
+    # Anti-clickjacking: block framing everywhere EXCEPT the PDF preview
+    # endpoint, which the dashboard intentionally embeds in a same-origin
+    # <iframe> (modal PDF viewer). SAMEORIGIN still forbids cross-site framing.
+    is_preview = request.endpoint == "preview_file"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN" if is_preview else "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
@@ -463,7 +467,7 @@ def add_security_headers(response):
         "img-src 'self' data: blob:",
         "font-src 'self' https://cdnjs.cloudflare.com",
         "connect-src 'self'",
-        "frame-ancestors 'none'",
+        "frame-ancestors 'self'" if is_preview else "frame-ancestors 'none'",
         "base-uri 'self'",
         "form-action 'self'",
     ]

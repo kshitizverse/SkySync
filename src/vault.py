@@ -545,9 +545,36 @@ def _record_vault_activity(user_id, event_type, resource_type=None, resource_id=
     except Exception:
         pass
 
+def _download_from_telegram(handler, message_id):
+    """Download a file from Telegram to a temp file and return its bytes.
+
+    ``handler`` must be a ``_CachedHandler`` whose ``download_file`` writes
+    to *output_path* and returns ``True`` on success / ``False`` on failure.
+    Returns ``bytes`` or ``None`` on failure.
+    """
+    import tempfile
+    tmp = tempfile.NamedTemporaryFile(delete=False)
+    tmp.close()
+    try:
+        ok = handler.download_file(message_id, tmp.name)
+        if not ok:
+            return None
+        with open(tmp.name, "rb") as f:
+            return f.read()
+    except Exception as exc:
+        logger.error("Telegram download failed for message %s: %s", message_id, exc)
+        return None
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+
+
 def get_vault_plaintext(file_id, user_id):
     """Return plaintext bytes for a file, handling encryption/decryption as needed.
-    Returns None if unable.
+
+    Returns ``None`` if the file cannot be retrieved or decrypted.
     """
     from storage_db import get_user_file_record, get_user_by_id
     from telegram_handler import create_telegram_handler_for_user
@@ -561,49 +588,45 @@ def get_vault_plaintext(file_id, user_id):
         logger.error(f"User {user_id} not found for plaintext retrieval")
         return None
 
+    handler = create_telegram_handler_for_user(user)
+    if handler is None:
+        logger.error(f"Failed to get telegram handler for user {user_id}")
+        return None
+
     if not record.get("is_vaulted"):
-        # Not vaulted, just download and return
-        handler = create_telegram_handler_for_user(user)
-        if handler is None:
-            logger.error(f"Failed to get telegram handler for user {user_id}")
-            return None
-        return handler.download_file(record["telegram_message_id"])
+        # Not vaulted — download directly from Telegram
+        return _download_from_telegram(handler, record["telegram_message_id"])
 
     # File is vaulted
     if record.get("enc_flag") == 1:
-        # Encrypted: download encrypted blob, decrypt with VMK, return plaintext
-        handler = create_telegram_handler_for_user(user)
-        if handler is None:
-            logger.error(f"Failed to get telegram handler for user {user_id}")
-            return None
-        enc_content = handler.download_file(record["telegram_message_id"])
+        # Encrypted: download ciphertext, decrypt with VMK → DEK → plaintext
+        enc_content = _download_from_telegram(handler, record["telegram_message_id"])
         if enc_content is None:
             return None
-        # Get VMK from memory
         session_id = session.get("vault_session_id")
         vmk = _get_vmk_from_store(session_id)
         if vmk is None:
+            logger.warning("VMK not in memory — vault may be locked or expired")
             return None
         try:
-            dek = _unwrap_key(record["dek_wrap_nonce"], record["dek_wrap_cipher"], record["dek_wrap_tag"], vmk)
-            plaintext = _decrypt_file(record["file_enc_nonce"], enc_content, record["file_enc_tag"], dek)
-            return plaintext
+            dek = _unwrap_key(
+                record["dek_wrap_nonce"], record["dek_wrap_cipher"],
+                record["dek_wrap_tag"], vmk,
+            )
+            return _decrypt_file(
+                record["file_enc_nonce"], enc_content,
+                record["file_enc_tag"], dek,
+            )
         except Exception as e:
             logger.error(f"Failed to decrypt vaulted file {file_id}: {e}")
             return None
     else:
-        # Vaulted but not encrypted (plaintext in Telegram). Need to encrypt just-in-time.
-        handler = create_telegram_handler_for_user(user)
-        if handler is None:
-            logger.error(f"Failed to get telegram handler for user {user_id}")
-            return None
-        plaintext = handler.download_file(record["telegram_message_id"])
+        # Vaulted but not yet encrypted — download plaintext, encrypt just-in-time
+        plaintext = _download_from_telegram(handler, record["telegram_message_id"])
         if plaintext is None:
             return None
-        # Encrypt and upload just-in-time
-        success = _encrypt_and_vault_file(file_id, user, record)
-        if not success:
-            logger.error(f"Failed to encrypt vaulted file {file_id} just-in-time")
+        # Best-effort: encrypt the file so future accesses are fast
+        _encrypt_and_vault_file(file_id, user, record)
         return plaintext
 
 # ---------------------------------------------------------------------------
@@ -621,6 +644,15 @@ def vault_upload():
     user, err = require_vault_unlocked()
     if err:
         return err
+
+    # Rate-limit vault uploads by IP
+    from datetime import timedelta as _td
+    store = _get_rate_limit_store()
+    if store:
+        ip_key = f"vault_upload:{_client_ip()}"
+        retry = store.status(ip_key, 20, _td(minutes=1))
+        if retry:
+            return jsonify({"success": False, "error": "Upload rate limit. Please wait.", "retry_after": retry}), 429
 
     if "file" not in request.files:
         return jsonify({"success": False, "error": "No file provided"}), 400
@@ -651,9 +683,8 @@ def vault_upload():
         if file_size > max_size:
             return jsonify({"success": False, "error": f"File exceeds the {max_size // (1024*1024)} MB upload limit"}), 413
 
-        from telegram_handler import run_telegram_op
         from storage_db import create_file_record, vault_file, move_file_to_folder, get_user_file_record as _get_user_file_record
-        upload_result = run_telegram_op(cached, cached.handler.send_file(temp_path, caption=f"Vault upload by user"))
+        upload_result = cached.send_file(temp_path, caption="Vault upload")
         if not upload_result or not upload_result.get("message_id"):
             return jsonify({"success": False, "error": "Telegram upload failed"}), 500
 
@@ -668,6 +699,15 @@ def vault_upload():
         # Encrypt + vault the file immediately
         success = _encrypt_and_vault_file(record["id"], user, record)
         if not success:
+            # Clean up: delete the Telegram message and DB record
+            try:
+                cached.delete_message(upload_result["message_id"])
+            except Exception:
+                pass
+            from storage_db import get_connection
+            with get_connection() as conn:
+                conn.execute("DELETE FROM file_records WHERE id = ? AND user_id = ?",
+                             (record["id"], user["id"]))
             return jsonify({"success": False, "error": "Failed to encrypt file for Vault"}), 500
         vault_file(record["id"], user["id"])
 
@@ -684,6 +724,10 @@ def vault_upload():
             user["id"], "VAULT_FILE_UPLOADED", resource_type="file", resource_id=record["id"],
             metadata={"filename": safe_name, "size": file_size, "mime_type": file.mimetype},
         )
+
+        # Record rate limit on success
+        if store:
+            store.remember(f"vault_upload:{_client_ip()}")
 
         # Refresh record
         record = _get_user_file_record(record["id"], user["id"])
@@ -862,11 +906,17 @@ def _encrypt_and_vault_file(file_id, user, record):
     )
     # Update the telegram_message_id to the new one
     from storage_db import get_connection
+    old_message_id = record["telegram_message_id"]
     with get_connection() as conn:
         conn.execute(
             "UPDATE file_records SET telegram_message_id = ? WHERE id = ? AND user_id = ?",
             (new_message_id, file_id, user['id'])
         )
+    # Delete the original plaintext message from Telegram to avoid duplicates
+    try:
+        handler.delete_message(old_message_id)
+    except Exception as exc:
+        logger.warning("Could not delete original plaintext message %s: %s", old_message_id, exc)
     return True
 
 @vault_bp.route("/api/vault/restore", methods=["POST"])
