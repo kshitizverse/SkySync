@@ -295,6 +295,23 @@ button { cursor: pointer; }
   box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.1);
 }
 
+/* Sort dropdown readability fix - ensure options are clearly visible */
+.sort-box select {
+  background: rgba(15, 34, 48, 0.9) !important;
+  color: var(--text) !important;
+}
+
+.sort-box select option {
+  background: var(--bg);
+  color: var(--text);
+  padding: 8px 10px;
+}
+
+.sort-box select option:hover {
+  background: var(--accent);
+  color: #07141f;
+}
+
 .view-toggle { display: inline-flex; gap: 6px; align-self: flex-end; }
 
 .toggle-btn {

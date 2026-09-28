@@ -501,9 +501,11 @@ async function loadViewData(view) {
       state.trashFolders = result.folders || [];
       state.files = state.trashFiles;
       state.folders = state.trashFolders;
+    renderStats();
     } else if (view === 'favorites') {
       state.files = normalizeFiles(result.files || []);
       state.folders = [];
+      renderStats();
     } else {
       state.allFiles = normalizeFiles(result.files || []);
       state.files = state.allFiles;
@@ -2880,6 +2882,28 @@ async function openVault() {
   vaultState.unlocked = true;
   showVaultUnlocked();
   await loadVaultData();
+}
+
+function goBackToVault() {
+  hideAllViews();
+  document.getElementById("vault-view").hidden = false;
+  document.getElementById("vault-lock-screen").hidden = true;
+  state.currentView = "vault";
+  vaultState.currentFolderId = null;
+  vaultState.breadcrumb = [];
+  renderVaultBreadcrumb();
+  renderWorkspace();
+}
+
+function goBackToVault() {
+  hideAllViews();
+  document.getElementById("vault-view").hidden = false;
+  document.getElementById("vault-lock-screen").hidden = true;
+  state.currentView = "vault";
+  vaultState.currentFolderId = null;
+  vaultState.breadcrumb = [];
+  renderVaultBreadcrumb();
+  renderWorkspace();
 }
 
 async function checkVaultStatus() {
