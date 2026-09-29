@@ -238,29 +238,24 @@
           <div class="modal-heading">
             <h3>&#128279; Share File</h3>
             <p id="share-modal-filename" class="share-modal-filename"></p>
+            <p id="share-modal-filemeta" class="share-modal-filemeta"></p>
           </div>
           <form id="share-form">
             <div class="share-section">
-              <div class="share-section-label">Expiration</div>
-              <div class="share-radio-group">
-                <label class="share-radio"><input type="radio" name="share-expiry" value="" checked> Never</label>
-                <label class="share-radio"><input type="radio" name="share-expiry" value="1h"> 1 hour</label>
-                <label class="share-radio"><input type="radio" name="share-expiry" value="1d"> 1 day</label>
-                <label class="share-radio"><input type="radio" name="share-expiry" value="7d"> 7 days</label>
-                <label class="share-radio"><input type="radio" name="share-expiry" value="custom"> Custom</label>
+              <div class="share-section-label">Permissions</div>
+              <div class="share-check-group">
+                <label class="checkbox-label">
+                  <input type="checkbox" id="share-can-view" checked> Allow viewing
+                </label>
+                <label class="checkbox-label">
+                  <input type="checkbox" id="share-can-download" checked> Allow downloading
+                </label>
               </div>
-            </div>
-            <div class="form-group" id="share-custom-expiry-group" hidden>
-              <label>Custom Expiration</label>
-              <input type="datetime-local" id="share-custom-expiry" aria-label="Custom expiration date">
             </div>
             <div class="share-divider"></div>
             <div class="share-section">
               <div class="share-section-label">Security</div>
               <div class="share-check-group">
-                <label class="checkbox-label">
-                  <input type="checkbox" id="share-can-download" checked> Allow download
-                </label>
                 <label class="checkbox-label">
                   <input type="checkbox" id="share-require-password"> Require password
                 </label>
@@ -273,30 +268,54 @@
               <label>Password</label>
               <input type="password" id="share-password" placeholder="Enter password" maxlength="128" autocomplete="off" aria-label="Share password">
             </div>
-            <div class="form-group">
-              <label>Download limit</label>
-              <select id="share-download-limit" aria-label="Download limit">
-                <option value="">No limit</option>
-                <option value="1">1 download</option>
-                <option value="3">3 downloads</option>
-                <option value="5">5 downloads</option>
-                <option value="10">10 downloads</option>
-                <option value="25">25 downloads</option>
-                <option value="50">50 downloads</option>
-                <option value="100">100 downloads</option>
-              </select>
+            <div class="share-section">
+              <div class="share-section-label">Expiration</div>
+              <div class="share-radio-group">
+                <label class="share-radio"><input type="radio" name="share-expiry" value="" checked> Never</label>
+                <label class="share-radio"><input type="radio" name="share-expiry" value="1d"> 1 day</label>
+                <label class="share-radio"><input type="radio" name="share-expiry" value="7d"> 7 days</label>
+                <label class="share-radio"><input type="radio" name="share-expiry" value="30d"> 30 days</label>
+                <label class="share-radio"><input type="radio" name="share-expiry" value="custom"> Custom</label>
+              </div>
+            </div>
+            <div class="form-group" id="share-custom-expiry-group" hidden>
+              <label>Custom Expiration</label>
+              <input type="datetime-local" id="share-custom-expiry" aria-label="Custom expiration date">
+            </div>
+            <div class="share-section">
+              <div class="share-section-label">Download limit</div>
+              <div class="share-radio-group">
+                <label class="share-radio"><input type="radio" name="share-dlimit" value="" checked> Unlimited</label>
+                <label class="share-radio"><input type="radio" name="share-dlimit" value="1"> 1</label>
+                <label class="share-radio"><input type="radio" name="share-dlimit" value="5"> 5</label>
+                <label class="share-radio"><input type="radio" name="share-dlimit" value="10"> 10</label>
+                <label class="share-radio"><input type="radio" name="share-dlimit" value="custom"> Custom</label>
+              </div>
+            </div>
+            <div class="form-group" id="share-dlimit-custom-group" hidden>
+              <label>Custom download limit</label>
+              <input type="number" id="share-dlimit-custom" min="1" max="10000" placeholder="Max downloads" aria-label="Custom download limit">
             </div>
             <div class="share-result" id="share-result" hidden>
-              <div class="share-result-header">Share link created</div>
+              <div class="share-result-header">&#10003; Share created</div>
               <div class="share-result-url">
                 <input type="text" id="share-url-input" readonly aria-label="Share URL">
-                <button type="button" class="primary-btn" id="copy-share-btn">Copy</button>
+                <button type="button" class="primary-btn" id="copy-share-btn">Copy Link</button>
               </div>
               <div class="share-result-meta" id="share-result-meta"></div>
+              <div class="share-social-row" id="share-social-row">
+                <button type="button" class="soft-btn share-social-btn" id="share-native-btn" title="Share via your device">&#128237; Share</button>
+                <a class="soft-btn share-social-btn" id="share-whatsapp-btn" href="#" target="_blank" rel="noopener noreferrer">WhatsApp</a>
+                <a class="soft-btn share-social-btn" id="share-telegram-btn" href="#" target="_blank" rel="noopener noreferrer">Telegram</a>
+                <a class="soft-btn share-social-btn" id="share-email-btn" href="#">Email</a>
+              </div>
+              <div class="share-result-actions">
+                <button type="button" class="danger-btn soft-btn" id="share-revoke-btn">Revoke Share</button>
+              </div>
             </div>
             <div class="modal-actions">
               <button class="soft-btn" data-close-modal="share-modal" type="button">Cancel</button>
-              <button class="primary-btn" type="submit" id="create-share-btn">Create Secure Link</button>
+              <button class="primary-btn" type="submit" id="create-share-btn">Create Share</button>
             </div>
           </form>
         </div>
@@ -372,8 +391,9 @@
       <div class="vault-lock-screen" id="vault-lock-screen" hidden role="dialog" aria-modal="true" aria-label="Vault locked">
         <div class="vault-lock-card">
           <div class="vault-lock-icon">&#128274;</div>
-          <h2 class="vault-lock-title">Vault Locked</h2>
-          <p class="vault-lock-desc">Your private files are protected.</p>
+          <h2 class="vault-lock-title">Secure Vault</h2>
+          <p class="vault-lock-subtitle">&#128274; Private &amp; encrypted</p>
+          <p class="vault-lock-desc">Your private files are encrypted and accessible only after unlocking.</p>
           <form id="vault-pin-form" novalidate>
             <label class="vault-pin-label" for="vault-pin-input">Vault PIN</label>
             <input type="password" id="vault-pin-input" class="vault-pin-input" maxlength="128" autocomplete="off" inputmode="numeric" placeholder="Enter your PIN" aria-label="Vault PIN" required>
@@ -388,38 +408,53 @@
         <section class="vault-toolbar panel">
           <div class="vault-toolbar-left">
             <div class="vault-header-info">
-              <h2 class="vault-header-title">&#128274; Vault</h2>
-              <span class="vault-header-subtitle" id="vault-header-subtitle">Private files</span>
+              <div class="vault-header-icon">&#128274;</div>
+              <div>
+                <h2 class="vault-header-title">Secure Vault</h2>
+                <span class="vault-header-subtitle" id="vault-header-subtitle">Private &amp; encrypted</span>
+              </div>
             </div>
-            <div class="vault-autolock-indicator" id="vault-autolock-indicator">
-              <span class="autolock-label">Auto-lock in</span>
+            <div class="vault-autolock-indicator" id="vault-autolock-indicator" title="Vault auto-locks after 5 minutes of inactivity">
+              <span class="autolock-label">Auto-lock</span>
               <span class="autolock-timer" id="vault-autolock-timer">05:00</span>
             </div>
           </div>
           <div class="vault-toolbar-actions">
-            <button class="soft-btn" id="vault-upload-btn" type="button">Upload</button>
-            <button class="soft-btn" id="vault-new-folder-btn" type="button">+ Folder</button>
-            <button class="soft-btn" id="vault-back-btn" type="button">← Back to Vault</button>
-            <button class="soft-btn danger-btn" id="vault-lock-btn" type="button">&#128274; Lock Vault</button>
+            <button class="soft-btn" id="vault-back-btn" type="button">← Back to My Drive</button>
+            <button class="soft-btn danger-btn" id="vault-lock-btn" type="button">&#128274; Lock</button>
           </div>
         </section>
         <section class="status-strip" id="vault-status-strip">
           <div>
-            <strong id="vault-section-title">Vault</strong>
-            <span id="vault-section-subtitle">Private files</span>
+            <strong id="vault-section-title">Secure Vault</strong>
+            <span id="vault-section-subtitle">Your private files are encrypted and accessible only after unlocking.</span>
           </div>
         </section>
         <section class="content-panel panel">
           <div class="vault-breadcrumb" id="vault-breadcrumb" role="navigation" aria-label="Vault folder navigation"></div>
+          <div class="vault-controls">
+            <div class="vault-controls-actions">
+              <button class="primary-btn" id="vault-upload-btn" type="button">Upload</button>
+              <button class="soft-btn" id="vault-new-folder-btn" type="button">+ Folder</button>
+            </div>
+            <div class="vault-controls-filters">
+              <input type="search" id="vault-search-input" class="vault-search-input" placeholder="Search Vault" aria-label="Search Vault">
+              <select id="vault-sort-select" class="vault-sort-select" aria-label="Sort Vault items">
+                <option value="newest">Newest first</option>
+                <option value="oldest">Oldest first</option>
+                <option value="name">Name A-Z</option>
+              </select>
+            </div>
+          </div>
           <div class="empty-state" id="vault-empty-state" hidden>
             <div class="empty-icon">&#128274;</div>
             <h3>Your Vault is empty</h3>
             <p>Move private files here to keep them away from your normal Drive.</p>
             <div class="empty-actions">
-              <button class="primary-btn" id="vault-empty-goto-drive" type="button">Go to My Drive</button>
+              <button class="primary-btn" id="vault-empty-goto-drive" type="button">← Back to My Drive</button>
             </div>
           </div>
-          <div class="files-grid" id="vault-files-grid" role="list" aria-label="Vault files and folders"></div>
+          <div class="files-grid vault-grid" id="vault-files-grid" role="list" aria-label="Vault files and folders"></div>
         </section>
         <input type="file" id="vault-file-input" multiple hidden aria-hidden="true">
       </div>

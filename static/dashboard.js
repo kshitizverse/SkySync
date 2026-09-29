@@ -39,6 +39,13 @@ var _uploadInProgress = false;
 function setupNavigationGuards() {
   window.addEventListener('popstate', function(e) {
     var params = new URLSearchParams(window.location.search);
+    var viewParam = params.get('view');
+    // Leaving the Vault via browser back/forward must lock it, exactly like
+    // every other leave path. Run BEFORE currentView is overwritten below.
+    if (state.currentView === 'vault' && vaultState.unlocked && viewParam !== 'vault') {
+      leaveVault(viewParam || 'files');
+      return;
+    }
     var fid = params.get('folder_id');
     state.currentFolderId = fid ? parseInt(fid) : null;
     state.currentPage = 1;
@@ -87,10 +94,12 @@ function setupNavigationGuards() {
         document.getElementById('storage-intel-view').hidden = false;
         loadStorageIntelligence();
       } else if (viewParam === 'vault') {
-        // For vault, we need to call openVault but prevent recursion
-        if (state.currentView !== 'vault') {
-          openVault();
-        }
+        // Re-derive the Vault view from authoritative server state on every
+        // back/forward. Previously guarded by `state.currentView !== 'vault'`,
+        // which was ALWAYS false here (currentView had just been set from the
+        // URL param), so back/forward never re-rendered the Vault and stale
+        // Vault UI could be resurrected.
+        openVault();
       }
       return; // Skip the rest of the popstate handling
     }
@@ -115,7 +124,9 @@ function setupNavigationGuards() {
         loadSettingsViewContent();
     }
   });
-  history.replaceState(null, '', location.pathname);
+  // NOTE: no URL stripping here — deep links like /dashboard?view=settings
+  // must survive page load (spec section 11); bootstrapWorkspace navigates to
+  // the view named in the URL and keeps it.
 
   window.addEventListener('beforeunload', function(e) {
     if (_uploadInProgress) {
@@ -172,6 +183,20 @@ async function bootstrapWorkspace() {
       // configured / locked / unlocked state immediately on load and after any
       // hard refresh (item G / J). Fire-and-forget: it only updates the nav.
       checkVaultStatus();
+      // Deep-link support: /dashboard?view=settings (etc.) must land on that
+      // view after bootstrap (spec section 11 — URL, state and DOM agree).
+      // 'vault' goes through openVault() so the state machine decides between
+      // the PIN screen and the unlocked view; everything else navigates
+      // directly with full URL/state/DOM sync.
+      var bootView = params.get('view');
+      if (bootView && bootView !== 'files' && state.currentView === 'files') {
+        if (bootView === 'vault') {
+          openVault();
+        } else {
+          var bootBtn = document.querySelector('.sidebar-nav .nav-item[data-view="' + bootView + '"]');
+          if (bootBtn) bootBtn.click();
+        }
+      }
     } finally {
       // Always clear timeouts to prevent leaks
       clearTimeout(profileTimeout);
@@ -196,6 +221,19 @@ async function bootstrapWorkspace() {
 }
 
 function setupEventListeners() {
+  // Every sidebar navigation that leaves an unlocked Vault must first lock it
+  // (professional secure-folder model: leaving = locking). Centralized here so
+  // Files/Favorites/Recent/Trash/Shares/Activity/Storage/Settings all behave
+  // identically. Vault itself is excluded (it handles its own entry).
+  document.querySelectorAll('.sidebar-nav .nav-item').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var v = btn.dataset.view;
+      if (v && v !== 'vault' && state.currentView === 'vault' && vaultState.unlocked) {
+        leaveVault(v);
+      }
+    }, true); // capture phase: runs before the existing per-view handlers
+  });
+
   let searchTimeout;
   document.getElementById('search-input').addEventListener('input', (e) => {
     clearTimeout(searchTimeout);
@@ -307,6 +345,15 @@ function setupEventListeners() {
   document.getElementById('edit-profile-btn').addEventListener('click', openEditName);
   document.getElementById('share-form').addEventListener('submit', submitShare);
   document.getElementById('copy-share-btn').addEventListener('click', copyShareUrl);
+  var shareRevokeBtn = document.getElementById('share-revoke-btn');
+  if (shareRevokeBtn) shareRevokeBtn.addEventListener('click', revokeShareFromModal);
+  var shareDlimitCustomRadio = document.querySelector('input[name="share-dlimit"][value="custom"]');
+  if (shareDlimitCustomRadio) {
+    shareDlimitCustomRadio.addEventListener('change', function() {
+      document.getElementById('share-dlimit-custom-group').hidden = this.value !== 'custom';
+      if (this.value === 'custom') document.getElementById('share-dlimit-custom').focus();
+    });
+  }
   var shareRequirePassword = document.getElementById('share-require-password');
   if (shareRequirePassword) {
     shareRequirePassword.addEventListener('change', function() {
@@ -362,8 +409,11 @@ function setupEventListeners() {
   if (logoutLink) {
     logoutLink.addEventListener('click', function(e) {
       e.preventDefault();
-      showConfirm('Sign out?', 'You will be signed out of SkySync.', 'Sign out', false).then(function(ok) {
-        if (ok) window.location.href = routes.logout;
+      showConfirm('Sign out?', 'You will be signed out of SkySync.', 'Sign out', false).then(async function(ok) {
+        if (!ok) return;
+        // Lock the Vault on the way out so the server-side window closes too.
+        try { if (vaultState.unlocked) await fetchJSON('/api/vault/lock', { method: 'POST' }); } catch (err) { /* best-effort */ }
+        window.location.href = routes.logout;
       });
     });
   }
@@ -945,9 +995,14 @@ function renderFileCard(file, isTrash = false) {
 
   const previewImg = article.querySelector('img[data-fallback]');
   if (previewImg) {
+    previewImg.addEventListener('load', function() { previewImg.classList.add('loaded'); });
     previewImg.addEventListener('error', function() {
       this.outerHTML = '<div class="file-glyph">IMG</div>';
     });
+  }
+  const previewVideo = article.querySelector('video.file-preview');
+  if (previewVideo) {
+    previewVideo.addEventListener('loadeddata', function() { previewVideo.classList.add('loaded'); });
   }
 
   return article;
@@ -980,13 +1035,19 @@ function handleFileAction(action, file) {
       document.getElementById('share-url-input').value = '';
       document.getElementById('share-result-meta').innerHTML = '';
       document.getElementById('share-modal-filename').textContent = escapeHtml(file.name);
+      var shareMetaEl = document.getElementById('share-modal-filemeta');
+      if (shareMetaEl) shareMetaEl.textContent = formatTypeLabel(file.type) + ' \u00B7 ' + formatSize(file.size || 0);
       document.getElementById('create-share-btn').hidden = false;
+      var shareRevokeBtn2 = document.getElementById('share-revoke-btn');
+      if (shareRevokeBtn2) shareRevokeBtn2.hidden = true;
       var shareForm = document.getElementById('share-form');
       shareForm.reset();
       var sharePwdGroup = document.getElementById('share-password-group');
       if (sharePwdGroup) sharePwdGroup.hidden = true;
       var shareCustomGroup = document.getElementById('share-custom-expiry-group');
       if (shareCustomGroup) shareCustomGroup.hidden = true;
+      var shareDlimitGroup = document.getElementById('share-dlimit-custom-group');
+      if (shareDlimitGroup) shareDlimitGroup.hidden = true;
       openModal('share-modal');
       break;
     case 'restore': restoreSingleFile(file); break;
@@ -1177,7 +1238,7 @@ async function submitShare(event) {
   const passwordEl = document.getElementById('share-password');
   const password = passwordEl ? passwordEl.value : '';
   const oneTime = document.getElementById('share-one-time').checked;
-  const downloadLimit = document.getElementById('share-download-limit').value;
+  var downloadLimit; // resolved below from the share-dlimit radio group
 
   let expiresAt = null;
   if (expiry === '1h') {
@@ -1186,6 +1247,8 @@ async function submitShare(event) {
     expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   } else if (expiry === '7d') {
     expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  } else if (expiry === '30d') {
+    expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
   } else if (expiry === 'custom') {
     const customExpiry = document.getElementById('share-custom-expiry').value;
     if (customExpiry) {
@@ -1196,8 +1259,21 @@ async function submitShare(event) {
     }
   }
 
+  // Download limit now arrives via radio group (+ optional custom number).
+  var dlimitRadio = document.querySelector('input[name="share-dlimit"]:checked');
+  var dlimitMode = dlimitRadio ? dlimitRadio.value : '';
+  if (dlimitMode === 'custom') {
+    var customEl = document.getElementById('share-dlimit-custom');
+    downloadLimit = customEl ? customEl.value : '';
+  } else {
+    downloadLimit = dlimitMode;
+  }
+
+  const canViewEl = document.getElementById('share-can-view');
+  const canView = canViewEl ? canViewEl.checked : true;
+
   const body = {
-    can_view: true,
+    can_view: canView,
     can_download: canDownload,
     expires_at: expiresAt,
     one_time: oneTime,
@@ -1224,6 +1300,9 @@ async function submitShare(event) {
     document.getElementById('share-url-input').value = data.share.url;
     document.getElementById('share-result').hidden = false;
     createBtn.hidden = true;
+    var revokeBtn = document.getElementById('share-revoke-btn');
+    if (revokeBtn) revokeBtn.hidden = false;
+    setupShareSocialButtons(data.share.url, state.shareTarget.name);
 
     var metaHtml = '';
     if (data.share.expires_at) {
@@ -1243,12 +1322,13 @@ async function submitShare(event) {
     if (data.share.download_limit) metaHtml += '<span class="chip neutral">&#11015; Max ' + data.share.download_limit + '</span>';
 
     document.getElementById('share-result-meta').innerHTML = metaHtml;
+    state.shareTarget._lastShareId = data.share.id;
     showToast('Share link created', 'success');
   } catch (error) {
     showToast(error.message || 'Failed to create share link', 'error');
   } finally {
     createBtn.disabled = false;
-    createBtn.textContent = 'Create Secure Link';
+    createBtn.textContent = 'Create Share';
   }
 }
 
@@ -1257,6 +1337,59 @@ function copyShareUrl() {
   navigator.clipboard.writeText(input.value)
     .then(() => showToast('Link copied to clipboard', 'success'))
     .catch(() => { input.select(); document.execCommand('copy'); showToast('Link copied', 'success'); });
+}
+
+// Populate the native share + WhatsApp/Telegram/Email buttons for a created
+// share link. All values are URL-encoded; vault files never reach this path
+// (share creation is server-blocked with 403 for vaulted content).
+function setupShareSocialButtons(shareUrl, filename) {
+  var text = 'Shared file: ' + filename;
+  var encText = encodeURIComponent(text);
+  var encUrl = encodeURIComponent(shareUrl);
+
+  var nativeBtn = document.getElementById('share-native-btn');
+  if (nativeBtn) {
+    if (navigator.share) {
+      nativeBtn.hidden = false;
+      nativeBtn.onclick = function() {
+        navigator.share({ title: filename, text: text, url: shareUrl })
+          .then(function() { showToast('Shared', 'success'); })
+          .catch(function(err) { if (err && err.name !== 'AbortError') showToast('Share failed', 'error'); });
+      };
+    } else {
+      nativeBtn.hidden = true;
+    }
+  }
+
+  var wa = document.getElementById('share-whatsapp-btn');
+  if (wa) wa.href = 'https://wa.me/?text=' + encText + '%20' + encUrl;
+
+  var tg = document.getElementById('share-telegram-btn');
+  if (tg) tg.href = 'https://t.me/share/url?url=' + encUrl + '&text=' + encText;
+
+  var mail = document.getElementById('share-email-btn');
+  if (mail) mail.href = 'mailto:?subject=' + encText + '&body=' + encText + '%20' + encUrl;
+}
+
+async function revokeShareFromModal() {
+  if (!state.shareTarget) return;
+  var ok = await showConfirm('Revoke share?', 'The share link for "' + state.shareTarget.name + '" will be immediately disabled. This cannot be undone.', 'Revoke', true);
+  if (!ok) return;
+  try {
+    // The created share's id is stashed on the target by submitShare.
+    var shareId = state.shareTarget._lastShareId;
+    await fetchJSON('/api/shares/' + shareId + '/revoke', { method: 'DELETE' });
+    state.shares = state.shares.filter(function(s) { return s.id !== shareId; });
+    renderShares();
+    document.getElementById('share-result').hidden = true;
+    var revokeBtn = document.getElementById('share-revoke-btn');
+    if (revokeBtn) revokeBtn.hidden = true;
+    var createBtn = document.getElementById('create-share-btn');
+    if (createBtn) createBtn.hidden = false;
+    showToast('Share link revoked', 'success');
+  } catch (error) {
+    showToast(error.message || 'Failed to revoke share', 'error');
+  }
 }
 
 async function loadShares() {
@@ -2475,6 +2608,8 @@ const vaultState = {
   autoLockTimer: null,
   autoLockSeconds: 300,
   autoLockRemaining: 300,
+  search: '',
+  sort: 'newest',
 };
 
 function setupVaultEventListeners() {
@@ -2521,10 +2656,27 @@ function setupVaultEventListeners() {
     vaultNewFolderBtn.addEventListener('click', createVaultFolder);
   }
 
+  var vaultSearchInput = document.getElementById('vault-search-input');
+  if (vaultSearchInput) {
+    vaultSearchInput.addEventListener('input', function() {
+      vaultState.search = this.value.trim().toLowerCase();
+      renderVaultView();
+    });
+  }
+
+  var vaultSortSelect = document.getElementById('vault-sort-select');
+  if (vaultSortSelect) {
+    vaultSortSelect.addEventListener('change', function() {
+      vaultState.sort = this.value;
+      renderVaultView();
+    });
+  }
+
   var vaultEmptyGoto = document.getElementById('vault-empty-goto-drive');
   if (vaultEmptyGoto) {
     vaultEmptyGoto.addEventListener('click', function() {
-      navigateToFiles();
+      // Empty-vault "← Back to My Drive" must also lock on the way out.
+      leaveVault('files');
     });
   }
 
@@ -2907,6 +3059,48 @@ async function openVault() {
   }
 }
 
+function goBackToVault() {
+  // "← Back to My Drive" inside the Vault toolbar. Leaving the Vault ALWAYS
+  // locks it: this is the primary automatic-lock mechanism (professional
+  // secure-folder model). Never merely re-shows the same view.
+  leaveVault('files');
+}
+
+// Centralized leave-the-Vault routine. Every navigation away from the Vault
+// (sidebar views, Back to My Drive, logout, browser back where applicable)
+// goes through here: it locks the Vault server-side, wipes client Vault
+// state, and lands on the target view with URL + sidebar + DOM in sync.
+// Does NOTHING when the Vault is not currently unlocked.
+async function leaveVault(targetView) {
+  var target = targetView || 'files';
+  stopAutoLockTimer();
+  if (vaultState.unlocked) {
+    vaultState.unlocked = false;
+    try {
+      await fetchJSON('/api/vault/lock', { method: 'POST' });
+    } catch (e) { /* lock endpoint failure must not block navigation; the
+                      server-side 300 s inactivity window remains the backstop. */ }
+    // Clear sensitive client-side references immediately (spec section 3).
+    vaultState.files = [];
+    vaultState.folders = [];
+    vaultState.breadcrumb = [];
+    vaultState.currentFolderId = null;
+    updateVaultNav();
+    showToast('Vault locked', 'success');
+  }
+  // Reset any in-progress Vault folder browsing so a later entry starts clean.
+  vaultState.currentFolderId = null;
+  vaultState.breadcrumb = [];
+  // Land on the target view with full URL/state/DOM consistency.
+  if (target === 'files') {
+    navigateToFiles();
+  } else {
+    var navBtn = document.querySelector('.sidebar-nav .nav-item[data-view="' + target + '"]');
+    if (navBtn) navBtn.click();
+    else navigateToFiles();
+  }
+}
+
 async function openVaultInner() {
   state.currentView = 'vault';
   vaultState.currentFolderId = null;
@@ -2917,6 +3111,9 @@ async function openVaultInner() {
   hideAllViews();
   document.getElementById('vault-view').hidden = true;
   document.getElementById('vault-lock-screen').hidden = true;
+  // URL, state.currentView, sidebar highlight and visible view must always
+  // agree (spec section 11): entering the Vault updates the URL to ?view=vault.
+  history.pushState({ view: 'vault' }, '', '?view=vault');
 
   var status = await checkVaultStatus();
   if (!status.configured) {
@@ -2931,17 +3128,6 @@ async function openVaultInner() {
   vaultState.unlocked = true;
   showVaultUnlocked();
   await loadVaultData();
-}
-
-function goBackToVault() {
-  hideAllViews();
-  document.getElementById("vault-view").hidden = false;
-  document.getElementById("vault-lock-screen").hidden = true;
-  state.currentView = "vault";
-  vaultState.currentFolderId = null;
-  vaultState.breadcrumb = [];
-  renderVaultBreadcrumb();
-  renderWorkspace();
 }
 
 var _vaultStatusInFlight = null;
@@ -3338,9 +3524,11 @@ async function loadVaultData() {
       renderVaultBreadcrumb();
     }
   } catch (e) {
-    if (e.message && e.message.toLowerCase().includes('vault')) {
-      forceVaultLock();
-      showToast('Vault locked — enter your PIN to continue', 'info');
+    // The fetchJSON interceptor is the single announcer for "vault is locked"
+    // (it calls the idempotent forceVaultLock and toasts once); here we only
+    // suppress the noise. This kills the historical double lock-trigger.
+    if (!(e.message && e.message.toLowerCase().includes('vault is locked'))) {
+      showToast(e.message || 'Failed to load Vault', 'error');
     }
   }
 }
@@ -3354,12 +3542,30 @@ function renderVaultView() {
 
   var totalItems = vaultState.files.length + vaultState.folders.length;
   if (subtitle) subtitle.textContent = totalItems + ' item' + (totalItems === 1 ? '' : 's');
-  if (titleEl) titleEl.textContent = 'Vault';
-  if (subEl) subEl.textContent = totalItems + ' item' + (totalItems === 1 ? '' : 's');
+  if (titleEl) titleEl.textContent = 'Secure Vault';
+  if (subEl) subEl.textContent = 'Your private files are encrypted and accessible only after unlocking.';
 
+  // Vault search + sort (client-side over the unlocked vault's items only).
+  var files = vaultState.files.slice();
+  var folders = vaultState.folders.slice();
+  if (vaultState.search) {
+    var q = vaultState.search;
+    files = files.filter(function(f) { return (f.name || '').toLowerCase().includes(q); });
+    folders = folders.filter(function(d) { return (d.name || '').toLowerCase().includes(q); });
+  }
+  var sortFn = function(a, b) {
+    if (vaultState.sort === 'name') return String(a.name || '').localeCompare(String(b.name || ''));
+    var ta = new Date(a.date || 0).getTime() || 0;
+    var tb = new Date(b.date || 0).getTime() || 0;
+    return vaultState.sort === 'oldest' ? ta - tb : tb - ta;
+  };
+  files.sort(sortFn);
+  folders.sort(sortFn);
+
+  var shownItems = files.length + folders.length;
   grid.innerHTML = '';
 
-  if (totalItems === 0) {
+  if (totalItems === 0 || shownItems === 0) {
     emptyState.hidden = false;
     grid.hidden = true;
     return;
@@ -3369,7 +3575,7 @@ function renderVaultView() {
   grid.hidden = false;
   var fragment = document.createDocumentFragment();
 
-  vaultState.folders.forEach(function(folder) {
+  folders.forEach(function(folder) {
     var card = document.createElement('article');
     card.className = 'file-card folder-card';
     card.dataset.folderId = folder.id;
@@ -3401,7 +3607,7 @@ function renderVaultView() {
     fragment.appendChild(card);
   });
 
-  vaultState.files.forEach(function(file) {
+  files.forEach(function(file) {
     fragment.appendChild(renderVaultFileCard(file));
   });
 
@@ -3413,13 +3619,20 @@ function renderVaultFileCard(file) {
   article.className = 'file-card';
   article.dataset.fileId = file.id;
 
-  var glyph = fileGlyph(file.category);
+  var glyph = fileGlyph(file.category || file.type);
   var isImage = file.type === 'image';
+  var isVideo = file.type === 'video';
   var favClass = file.is_favorite ? ' favorite' : '';
 
-  var mediaContent = '';
+  // Fixed-aspect media block (4:3): intrinsic image dimensions can never
+  // stretch the card; a glyph placeholder renders while loading and on error.
+  var mediaContent;
   if (isImage) {
-    mediaContent = '<img src="' + previewUrl(file.id) + '" alt="' + escapeHtml(file.name) + '" class="file-thumb" loading="lazy">';
+    mediaContent = '<img src="' + previewUrl(file.id) + '" alt="' + escapeHtml(file.name) + '" class="file-thumb" loading="lazy">' +
+      '<div class="media-loading-spinner" aria-hidden="true"></div>';
+  } else if (isVideo) {
+    mediaContent = '<video src="' + previewUrl(file.id) + '" class="file-thumb" muted playsinline preload="metadata"></video>' +
+      '<div class="media-loading-spinner" aria-hidden="true"></div>';
   } else {
     mediaContent = '<div class="file-glyph">' + glyph + '</div>';
   }
@@ -3446,6 +3659,19 @@ function renderVaultFileCard(file) {
       handleFileAction(btn.dataset.action, file);
     });
   });
+
+  // CSP-safe media load/error handling (no inline handlers): mark loaded to
+  // fade in, or fall back to a glyph when the preview cannot load.
+  var thumb = article.querySelector('.file-thumb');
+  if (thumb) {
+    var mediaBox = article.querySelector('.file-media');
+    thumb.addEventListener('load', function() { thumb.classList.add('loaded'); });
+    thumb.addEventListener('loadeddata', function() { thumb.classList.add('loaded'); });
+    thumb.addEventListener('error', function() {
+      mediaBox.classList.add('media-fallback');
+      thumb.remove();
+    });
+  }
 
   return article;
 }
@@ -3606,6 +3832,11 @@ async function lockVault() {
 }
 
 function forceVaultLock() {
+  // LOCKED state per the Vault state machine (NOT_CONFIGURED / LOCKED / UNLOCKED):
+  // no Vault files rendered, no Vault actions accessible, PIN screen shown.
+  // Idempotent: safe to call from multiple paths (manual lock, server-forced
+  // re-lock, fetch interceptor). Never calls unlock — that recursion was the
+  // historical lock/unlock loop.
   vaultState.unlocked = false;
   vaultState.files = [];
   vaultState.folders = [];
@@ -3613,10 +3844,9 @@ function forceVaultLock() {
   vaultState.currentFolderId = null;
   stopAutoLockTimer();
   updateVaultNav();
-  // Every lock path (manual Lock Vault button, inactivity expiry, server-forced
-  // re-lock) must end on a visible PIN screen — never a silently locked state
-  // that leaves stale vault UI on screen.
-  state.currentView = 'vault';
+  if (state.currentView !== 'vault') return; // not viewing Vault: nothing to re-render
+  // URL/view consistency: the Vault view is locked — URL must say ?view=vault.
+  history.pushState({ view: 'vault' }, '', '?view=vault');
   showVaultLockScreen();
 }
 
@@ -3624,7 +3854,8 @@ function startAutoLockTimer() {
   // Display-only countdown. The authoritative 5-minute inactivity window is
   // enforced SERVER-SIDE (src/vault.py vault_is_unlocked, refreshed on every
   // vault API call); a second client-side lock timer caused unlock/lock loops
-  // when the two timers diverged. Expiry and re-lock are always server-driven.
+  // when the two timers diverged. Expiry and re-lock are always server-driven,
+  // surfaced through the fetchJSON interceptor → forceVaultLock().
   stopAutoLockTimer();
   vaultState.autoLockRemaining = vaultState.autoLockSeconds;
   updateAutoLockDisplay();
@@ -3657,7 +3888,7 @@ function navigateToFiles() {
   if (filesBtn) filesBtn.classList.add('active');
   hideAllViews();
   showMainContent();
-  history.pushState({}, '', location.pathname);
+  history.pushState({ view: 'files' }, '', '?view=files');
   loadViewData('files');
 }
 
@@ -3701,8 +3932,12 @@ async function createVaultFolder() {
 }
 
 window.addEventListener('popstate', function(e) {
-  if (state.currentView === 'vault') {
+  if (state.currentView === 'vault' && vaultState.unlocked) {
     var params = new URLSearchParams(window.location.search);
+    // Back/forward out of a vault subfolder lands on ?view=vault (or bare
+    // /dashboard): folder null => root. A different view param means the
+    // FIRST popstate handler already locked + navigated away.
+    if (params.get('view') !== 'vault' && params.get('view') !== null) return;
     var vfid = params.get('vault_folder');
     vaultState.currentFolderId = vfid ? parseInt(vfid) : null;
     loadVaultData();
@@ -3712,11 +3947,19 @@ window.addEventListener('popstate', function(e) {
 (function interceptVaultFetch() {
   var origFetchJSON = window.fetchJSON;
   if (!origFetchJSON) return;
+  var _vaultLockToastPending = false;
   window.fetchJSON = function(url, options) {
     return origFetchJSON(url, options).catch(function(err) {
       if (err && err.message && err.message.toLowerCase().includes('vault is locked')) {
+        // Single centralized reaction: forceVaultLock() is idempotent, and the
+        // toast is shown once per burst (loadVaultData's catch no longer toasts,
+        // so the interceptor is the ONLY lock-event announcer).
         forceVaultLock();
-        showToast('Vault locked — enter your PIN to continue', 'info');
+        if (!_vaultLockToastPending) {
+          _vaultLockToastPending = true;
+          showToast('Vault locked — enter your PIN to continue', 'info');
+          setTimeout(function() { _vaultLockToastPending = false; }, 1500);
+        }
       }
       throw err;
     });
