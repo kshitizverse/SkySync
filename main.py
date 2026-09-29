@@ -1324,7 +1324,14 @@ def delete_file(file_id):
         user["id"], "FILE_DELETED", resource_type="file", resource_id=file_id,
         metadata={"filename": record["filename"]},
     )
-    return jsonify({"success": True, "message": "File moved to trash"}), 200
+    # Report the authoritative server-side trash size so the client badge can
+    # update immediately (without opening the Trash view) and always matches
+    # what the server would list under view=trash.
+    return jsonify({
+        "success": True,
+        "message": "File moved to trash",
+        "trash_count": len(list_trash_files(user["id"])),
+    }), 200
 
 
 @app.route("/api/files/<int:file_id>/rename", methods=["POST"])
@@ -1526,10 +1533,11 @@ def create_file_share(file_id):
     if not record or record.get("is_deleted"):
         return jsonify({"success": False, "error": "File not found"}), 404
 
+    # Vault files are NEVER shareable: reject at creation time, not merely at
+    # delivery. Regardless of the Vault's current lock state, no share token is
+    # minted for vaulted content, so the Vault stays completely private.
     if record.get("is_vaulted"):
-        from vault import vault_is_unlocked
-        if not vault_is_unlocked(user["id"]):
-            return jsonify({"success": False, "error": "Vault is locked"}), 403
+        return jsonify({"success": False, "error": "Vault files cannot be shared"}), 403
 
     data = request.json or {}
     can_view = data.get("can_view", True)

@@ -501,6 +501,59 @@ class TestVaultFileShare(ShareTestBase):
         self.assertIn(r2.status_code, (403, 404))
 
 
+class TestVaultShareCreationBlocked(ShareTestBase):
+    """Vault files must be rejected at share CREATION time, not merely during
+    delivery: no share token may be minted for vaulted content, regardless of
+    whether the Vault is currently unlocked."""
+
+    def test_vault_file_share_creation_rejected_when_unlocked(self):
+        self._login(self.user_a["id"])
+        vault_file(self.file_a["id"], self.user_a["id"])
+        # Ensure the Vault is configured and unlocked (worst case for the API).
+        r_pin = self.client.post("/api/vault/pin", json={"pin": "123456"})
+        self.assertIn(r_pin.status_code, (200, 201, 400))  # 400 = already set
+        r_unlock = self.client.post("/api/vault/unlock", json={"pin": "123456"})
+        self.assertEqual(r_unlock.status_code, 200)
+
+        r = self.client.post(f"/api/files/{self.file_a['id']}/share", json={
+            "can_view": True, "can_download": True,
+        })
+        self.assertEqual(r.status_code, 403)
+        data = r.get_json()
+        self.assertFalse(data["success"])
+        self.assertIn("error", data)
+        # No share token in the response...
+        self.assertNotIn("share", data)
+        # ...and no share row created for the owner.
+        self.assertEqual(list_user_shares(self.user_a["id"]), [])
+
+    def test_vault_file_share_creation_rejected_when_locked(self):
+        self._login(self.user_a["id"])
+        vault_file(self.file_a["id"], self.user_a["id"])
+        r = self.client.post(f"/api/files/{self.file_a['id']}/share", json={"can_view": True})
+        self.assertEqual(r.status_code, 403)
+        self.assertNotIn("share", r.get_json())
+        self.assertEqual(list_user_shares(self.user_a["id"]), [])
+
+    def test_my_drive_share_still_works(self):
+        # Non-vaulted files must keep working after the creation-time guard.
+        self._login(self.user_a["id"])
+        r = self.client.post(f"/api/files/{self.file_a['id']}/share", json={"can_view": True})
+        self.assertEqual(r.status_code, 201)
+        data = r.get_json()
+        self.assertTrue(data["success"])
+        self.assertIn("token", data["share"])
+
+    def test_other_users_vault_file_share_isolated(self):
+        # IDOR/user isolation preserved: user B cannot mint a share for
+        # user A's vaulted (or any) file.
+        self._login(self.user_b["id"])
+        vault_file(self.file_a["id"], self.user_a["id"])
+        r = self.client.post(f"/api/files/{self.file_a['id']}/share", json={"can_view": True})
+        self.assertEqual(r.status_code, 404)
+        self.assertEqual(list_user_shares(self.user_b["id"]), [])
+
+
 class TestMoveSharedFileToVault(ShareTestBase):
     def test_move_to_vault_revokes_shares(self):
         self._login(self.user_a["id"])

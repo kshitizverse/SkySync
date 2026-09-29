@@ -307,12 +307,17 @@ function setupEventListeners() {
   document.getElementById('edit-profile-btn').addEventListener('click', openEditName);
   document.getElementById('share-form').addEventListener('submit', submitShare);
   document.getElementById('copy-share-btn').addEventListener('click', copyShareUrl);
-  document.getElementById('share-require-password').addEventListener('change', function() {
-    document.getElementById('share-password-group').hidden = !this.checked;
-    if (this.checked) {
-      document.getElementById('share-password').focus();
-    }
-  });
+  var shareRequirePassword = document.getElementById('share-require-password');
+  if (shareRequirePassword) {
+    shareRequirePassword.addEventListener('change', function() {
+      var pwdGroup = document.getElementById('share-password-group');
+      if (pwdGroup) pwdGroup.hidden = !this.checked;
+      if (this.checked) {
+        var pwdInput = document.getElementById('share-password');
+        if (pwdInput) pwdInput.focus();
+      }
+    });
+  }
   document.querySelectorAll('input[name="share-expiry"]').forEach(function(radio) {
     radio.addEventListener('change', function() {
       document.getElementById('share-custom-expiry-group').hidden = this.value !== 'custom';
@@ -978,8 +983,10 @@ function handleFileAction(action, file) {
       document.getElementById('create-share-btn').hidden = false;
       var shareForm = document.getElementById('share-form');
       shareForm.reset();
-      document.getElementById('share-password-group').hidden = true;
-      document.getElementById('share-custom-expiry-group').hidden = true;
+      var sharePwdGroup = document.getElementById('share-password-group');
+      if (sharePwdGroup) sharePwdGroup.hidden = true;
+      var shareCustomGroup = document.getElementById('share-custom-expiry-group');
+      if (shareCustomGroup) shareCustomGroup.hidden = true;
       openModal('share-modal');
       break;
     case 'restore': restoreSingleFile(file); break;
@@ -1165,8 +1172,10 @@ async function submitShare(event) {
   var expiryRadio = document.querySelector('input[name="share-expiry"]:checked');
   const expiry = expiryRadio ? expiryRadio.value : '';
   const canDownload = document.getElementById('share-can-download').checked;
-  const requirePassword = document.getElementById('share-require-password').checked;
-  const password = document.getElementById('share-password').value;
+  const requirePasswordEl = document.getElementById('share-require-password');
+  const requirePassword = requirePasswordEl ? requirePasswordEl.checked : false;
+  const passwordEl = document.getElementById('share-password');
+  const password = passwordEl ? passwordEl.value : '';
   const oneTime = document.getElementById('share-one-time').checked;
   const downloadLimit = document.getElementById('share-download-limit').value;
 
@@ -1408,10 +1417,31 @@ async function deleteSingleFile(file) {
   const ok = await showConfirm('Move to trash?', `"${file.name}" will be moved to Trash.`, 'Delete');
   if (!ok) return;
   try {
-    await fetchJSON(`${routes.fileBase}${file.id}/delete`, { method: 'DELETE' });
+    const result = await fetchJSON(`${routes.fileBase}${file.id}/delete`, { method: 'DELETE' });
     state.files = state.files.filter(f => f.id !== file.id);
     state.allFiles = state.allFiles.filter(f => f.id !== file.id);
     state.selection.delete(file.id);
+    // Update the sidebar trash count immediately from the server-reported
+    // size (authoritative; includes vaulted files, which are excluded from
+    // view=trash listings) instead of waiting for a Trash view load. Skipped
+    // on the Trash view itself, where state.trashFiles aliases state.files
+    // and the visible list is already correct.
+    if (state.currentView !== 'trash') {
+      if (result && typeof result.trash_count === 'number') {
+        if (state.trashFiles.length < result.trash_count) {
+          // Pad with inert placeholders: the badge only reads .length; real
+          // trash contents are re-fetched when the Trash view opens.
+          state.trashFiles = state.trashFiles.concat(
+            new Array(result.trash_count - state.trashFiles.length).fill({ id: 'trash-pad' })
+          );
+        } else {
+          state.trashFiles = state.trashFiles.filter(f => f.id !== file.id);
+        }
+      } else {
+        // Older server response without trash_count: optimistic fallback.
+        state.trashFiles.push(file);
+      }
+    }
     renderStats();
     renderWorkspace();
     // A vaulted file is not in state.files, so refresh the Vault view directly.
@@ -2466,6 +2496,11 @@ function setupVaultEventListeners() {
     vaultLockBtn.addEventListener('click', lockVaultConfirm);
   }
 
+  var vaultBackBtn = document.getElementById('vault-back-btn');
+  if (vaultBackBtn) {
+    vaultBackBtn.addEventListener('click', goBackToVault);
+  }
+
   var vaultUploadBtn = document.getElementById('vault-upload-btn');
   if (vaultUploadBtn) {
     vaultUploadBtn.addEventListener('click', function() {
@@ -2855,10 +2890,24 @@ document.addEventListener('DOMContentLoaded', function() {
 
 document.addEventListener('DOMContentLoaded', setupVaultEventListeners);
 
+var _vaultOpenInFlight = false;
+
 async function openVault() {
   // Intentionally no "already in vault" early-return: re-clicking Vault must
   // re-fetch authoritative status and re-render so the view/state can never
-  // go stale (item G — refresh on every Vault entry).
+  // go stale (item G — refresh on every Vault entry). Concurrent entries
+  // (double-click, rapid nav, popstate) are coalesced so overlapping status
+  // fetches and renders cannot race each other.
+  if (_vaultOpenInFlight) return;
+  _vaultOpenInFlight = true;
+  try {
+    await openVaultInner();
+  } finally {
+    _vaultOpenInFlight = false;
+  }
+}
+
+async function openVaultInner() {
   state.currentView = 'vault';
   vaultState.currentFolderId = null;
   document.querySelectorAll('.sidebar-nav .nav-item').forEach(function(b) { b.classList.remove('active'); });
@@ -2895,31 +2944,30 @@ function goBackToVault() {
   renderWorkspace();
 }
 
-function goBackToVault() {
-  hideAllViews();
-  document.getElementById("vault-view").hidden = false;
-  document.getElementById("vault-lock-screen").hidden = true;
-  state.currentView = "vault";
-  vaultState.currentFolderId = null;
-  vaultState.breadcrumb = [];
-  renderVaultBreadcrumb();
-  renderWorkspace();
-}
+var _vaultStatusInFlight = null;
 
-async function checkVaultStatus() {
-  try {
-    var data = await fetchJSON('/api/vault/status');
-    vaultState.configured = data.configured;
-    vaultState.unlocked = data.unlocked;
-    updateVaultNav();
-    return data;
-  } catch (e) {
-    // On a transient status failure do NOT assume "not configured" — that would
-    // wrongly route to the Set-Up screen. Preserve the last known state so the
-    // sidebar label and navigation stay consistent (item 7 / G).
-    updateVaultNav();
-    return { configured: vaultState.configured, unlocked: vaultState.unlocked, error: true };
-  }
+function checkVaultStatus() {
+  // Coalesce overlapping status calls: concurrent callers (bootstrap, nav,
+  // popstate, vault actions) share one in-flight request instead of racing.
+  if (_vaultStatusInFlight) return _vaultStatusInFlight;
+  _vaultStatusInFlight = (async function() {
+    try {
+      var data = await fetchJSON('/api/vault/status');
+      vaultState.configured = data.configured;
+      vaultState.unlocked = data.unlocked;
+      updateVaultNav();
+      return data;
+    } catch (e) {
+      // On a transient status failure do NOT assume "not configured" — that would
+      // wrongly route to the Set-Up screen. Preserve the last known state so the
+      // sidebar label and navigation stay consistent (item 7 / G).
+      updateVaultNav();
+      return { configured: vaultState.configured, unlocked: vaultState.unlocked, error: true };
+    } finally {
+      _vaultStatusInFlight = null;
+    }
+  })();
+  return _vaultStatusInFlight;
 }
 
 function updateVaultNav() {
@@ -3276,6 +3324,12 @@ async function loadVaultData() {
     vaultState.files = normalizeFiles(result.files || []);
     vaultState.folders = result.folders || [];
     updateVaultNav();
+    // The server refreshed its 5-minute inactivity window on this call — sync
+    // the display-only countdown with it so the indicator does not drift.
+    if (vaultState.unlocked) {
+      vaultState.autoLockRemaining = vaultState.autoLockSeconds;
+      updateAutoLockDisplay();
+    }
     renderVaultView();
     if (vaultState.currentFolderId) {
       await loadVaultBreadcrumb(vaultState.currentFolderId);
@@ -3286,6 +3340,7 @@ async function loadVaultData() {
   } catch (e) {
     if (e.message && e.message.toLowerCase().includes('vault')) {
       forceVaultLock();
+      showToast('Vault locked — enter your PIN to continue', 'info');
     }
   }
 }
@@ -3558,22 +3613,24 @@ function forceVaultLock() {
   vaultState.currentFolderId = null;
   stopAutoLockTimer();
   updateVaultNav();
-  if (state.currentView === 'vault') {
-    showVaultLockScreen();
-  }
+  // Every lock path (manual Lock Vault button, inactivity expiry, server-forced
+  // re-lock) must end on a visible PIN screen — never a silently locked state
+  // that leaves stale vault UI on screen.
+  state.currentView = 'vault';
+  showVaultLockScreen();
 }
 
 function startAutoLockTimer() {
+  // Display-only countdown. The authoritative 5-minute inactivity window is
+  // enforced SERVER-SIDE (src/vault.py vault_is_unlocked, refreshed on every
+  // vault API call); a second client-side lock timer caused unlock/lock loops
+  // when the two timers diverged. Expiry and re-lock are always server-driven.
   stopAutoLockTimer();
   vaultState.autoLockRemaining = vaultState.autoLockSeconds;
   updateAutoLockDisplay();
   vaultState.autoLockTimer = setInterval(function() {
-    vaultState.autoLockRemaining--;
+    vaultState.autoLockRemaining = Math.max(0, vaultState.autoLockRemaining - 1);
     updateAutoLockDisplay();
-    if (vaultState.autoLockRemaining <= 0) {
-      forceVaultLock();
-      showToast('Vault auto-locked due to inactivity', 'info');
-    }
   }, 1000);
 }
 
@@ -3590,13 +3647,6 @@ function updateAutoLockDisplay() {
   var mins = Math.floor(vaultState.autoLockRemaining / 60);
   var secs = vaultState.autoLockRemaining % 60;
   timerEl.textContent = String(mins).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
-}
-
-function resetAutoLockTimer() {
-  if (vaultState.unlocked) {
-    vaultState.autoLockRemaining = vaultState.autoLockSeconds;
-    updateAutoLockDisplay();
-  }
 }
 
 function navigateToFiles() {
@@ -3666,6 +3716,7 @@ window.addEventListener('popstate', function(e) {
     return origFetchJSON(url, options).catch(function(err) {
       if (err && err.message && err.message.toLowerCase().includes('vault is locked')) {
         forceVaultLock();
+        showToast('Vault locked — enter your PIN to continue', 'info');
       }
       throw err;
     });
