@@ -2,9 +2,10 @@
 Smart Vault — security foundation for SkySync with real encryption.
 
 Provides server-side PIN management, unlock/lock state, rate limiting,
-and auto-lock on inactivity. Vault state is stored exclusively in the
-server-side memory (VMK) keyed by session id. The client never controls
-unlock state.
+and auto-lock on inactivity. The VMK lives only in a trusted server-side
+store keyed by session id and bound to the owning user — Redis-backed
+(shared across gunicorn workers) when REDIS_URL is set, per-process memory
+otherwise. The client never controls unlock state and never sees the VMK.
 
 Endpoints
 ---------
@@ -21,6 +22,7 @@ GET  /api/vault/folders      — list vaulted folders (unlocked only)
 import logging
 import os
 import secrets
+import tempfile
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -65,47 +67,250 @@ AESGCM_NONCE_LEN = 12    # 96-bit nonce
 AESGCM_TAG_LEN = 16      # 128-bit tag
 
 # ---------------------------------------------------------------------------
-# In-memory VMK store (thread-safe, session-specific)
+# Shared VMK store (thread-safe, session-specific, cross-worker)
+#
+# The VMK (Vault Master Key) lives ONLY in memory of a trusted server-side
+# store while the Vault is unlocked — never in the database, never in the
+# browser, never in an API response. Two backends:
+#
+#   * RedisBackend  — used when REDIS_URL is set (production). Entries live
+#     under a strict ``skysync:vmk:`` namespace, carry the owning user id
+#     (binding check on every read) and expire after VAULT_INACTIVITY_SECONDS
+#     of inactivity. Because gunicorn workers share Redis, an unlock on one
+#     worker is visible to the next request on any other worker.
+#
+#   * MemoryBackend — used ONLY when REDIS_URL is completely absent (local
+#     development, single-process runs). Same semantics as the historical
+#     per-process dict; single-worker-safe.
+#
+# Fail-closed rule: if REDIS_URL is configured but Redis is unreachable at
+# selection time or on later reads/writes, the store raises
+# _VMKStoreUnavailable. Endpoint callers translate that into an honest HTTP
+# 503; they NEVER silently fall back to the per-process backend, because a
+# fallback would split gunicorn workers (unlock on one, 403 on another) and
+# quietly reintroduce the multi-worker bug.
+#
+# Stored record (identical across backends):
+#   { user_id, vmk (bytes), created, last_activity }
+# The VMK is serialized for Redis as base64 inside JSON; it is never logged,
+# never returned through any API, and is destroyed on lock, on inactivity
+# expiry, and (for the memory backend) on process restart.
 # ---------------------------------------------------------------------------
 
-# Structure: { session_id: { 'vmk': <bytes>, 'last_activity': <timestamp> } }
-_vmk_store = {}
-_vmk_store_lock = threading.Lock()
+class _VMKStoreUnavailable(Exception):
+    """REDIS_URL is configured but the shared store cannot be reached.
 
-def _get_vmk_from_store(session_id):
-    """Retrieve VMK from store if present and not expired."""
-    with _vmk_store_lock:
-        entry = _vmk_store.get(session_id)
-        if not entry:
-            return None
-        now = time.time()
-        if now - entry['last_activity'] > VAULT_INACTIVITY_SECONDS:
-            # Expired, remove it
-            del _vmk_store[session_id]
-            return None
-        # Update last activity on successful retrieval
-        entry['last_activity'] = now
-        return entry['vmk']
+    Raised instead of falling back to the per-process memory backend, which
+    would break the multi-worker guarantee. Never carries VMK material —
+    only the original connection error text for server-side logs.
+    """
+    pass
 
-def _store_vmk(session_id, vmk):
-    """Store VMK in store with current timestamp."""
-    with _vmk_store_lock:
-        _vmk_store[session_id] = {
-            'vmk': vmk,
-            'last_activity': time.time()
-        }
+_VMK_KEY_PREFIX = "skysync:vmk:"
+_vmk_backend = None
+_vmk_backend_lock = threading.Lock()
+
+class _MemoryVMKBackend:
+    """Process-local dict backend (legacy behavior, single worker)."""
+
+    def __init__(self):
+        self._entries = {}
+        self._lock = threading.Lock()
+
+    def put(self, session_id, record):
+        with self._lock:
+            self._entries[session_id] = record
+
+    def get(self, session_id):
+        with self._lock:
+            return self._entries.get(session_id)
+
+    def delete(self, session_id):
+        with self._lock:
+            self._entries.pop(session_id, None)
+
+    def touch(self, session_id, now):
+        with self._lock:
+            entry = self._entries.get(session_id)
+            if entry is not None:
+                entry["last_activity"] = now
+
+class _RedisVMKBackend:
+    """Redis backend shared by all gunicorn workers.
+
+    Uses a TTL equal to VAULT_INACTIVITY_SECONDS so an entry cannot outlive
+    the unlocked window even if a lock request never arrives (crash, network
+    drop). Key format: ``skysync:vmk:<session_id>``.
+    """
+
+    def __init__(self, redis_url):
+        import redis
+        # decode_responses=False so the VMK blob stays bytes; lazy connect —
+        # the first use happens inside a worker, never in the preloaded master.
+        self._r = redis.from_url(redis_url, decode_responses=False, socket_timeout=3)
+        self._r.ping()
+
+    @staticmethod
+    def _key(session_id):
+        return _VMK_KEY_PREFIX + session_id
+
+    @staticmethod
+    def _dumps(record):
+        import base64
+        import json
+        payload = dict(record)
+        payload["vmk"] = base64.b64encode(record["vmk"]).decode("ascii")
+        return json.dumps(payload).encode("utf-8")
+
+    @staticmethod
+    def _loads(blob):
+        import base64
+        import json
+        payload = json.loads(blob.decode("utf-8"))
+        payload["vmk"] = base64.b64decode(payload["vmk"])
+        return payload
+
+    def put(self, session_id, record):
+        self._r.set(self._key(session_id), self._dumps(record),
+                    ex=int(VAULT_INACTIVITY_SECONDS))
+
+    def get(self, session_id):
+        blob = self._r.get(self._key(session_id))
+        if blob is None:
+            return None
+        return self._loads(blob)
+
+    def delete(self, session_id):
+        self._r.delete(self._key(session_id))
+
+    def touch(self, session_id, now):
+        # Refresh the TTL so the Redis window tracks session activity the
+        # same way the memory backend tracks last_activity.
+        try:
+            self._r.expire(self._key(session_id), int(VAULT_INACTIVITY_SECONDS))
+        except Exception:
+            pass
+
+def _get_vmk_backend():
+    """Lazily select and cache the VMK backend for this process.
+
+    Selection rule (fail-closed):
+      * REDIS_URL absent            -> _MemoryVMKBackend (development only).
+      * REDIS_URL set + reachable   -> _RedisVMKBackend (production).
+      * REDIS_URL set + unreachable -> raise _VMKStoreUnavailable.
+        No memory fallback: the backend choice is deliberately NOT cached on
+        failure, so a later call retries Redis instead of permanently
+        degrading this worker to process-local storage.
+    """
+    global _vmk_backend
+    if _vmk_backend is not None:
+        return _vmk_backend
+    with _vmk_backend_lock:
+        if _vmk_backend is not None:
+            return _vmk_backend
+        redis_url = os.getenv("REDIS_URL", "").strip()
+        if not redis_url:
+            _vmk_backend = _MemoryVMKBackend()
+            logger.info("Vault VMK store: in-memory backend (REDIS_URL not set "
+                        "— single-process/development only)")
+            return _vmk_backend
+        try:
+            backend = _RedisVMKBackend(redis_url)
+        except Exception as exc:
+            # Do NOT cache and do NOT fall back to memory: every caller gets
+            # a retry and an explicit unavailability. The message contains
+            # only the connection error, never key material.
+            raise _VMKStoreUnavailable(
+                "REDIS_URL is configured but the shared VMK store is "
+                "unreachable: %s" % exc
+            )
+        _vmk_backend = backend
+        logger.info("Vault VMK store: Redis backend (shared across workers)")
+        return _vmk_backend
+
+def _get_vmk_from_store(session_id, user_id=None):
+    """Retrieve the VMK for *session_id* if present and not expired.
+
+    ``user_id`` (the authenticated caller) is verified against the stored
+    owner binding: a session id from another user can never obtain the VMK.
+    Returns the VMK bytes, or ``None`` if absent/expired/not owned.
+
+    Raises _VMKStoreUnavailable when REDIS_URL is configured but Redis is
+    unreachable — callers translate this into HTTP 503, never a fallback.
+    """
+    if not session_id:
+        return None
+    backend = _get_vmk_backend()
+    try:
+        record = backend.get(session_id)
+    except _VMKStoreUnavailable:
+        raise
+    except Exception as exc:
+        raise _VMKStoreUnavailable(
+            "shared VMK store read failed: %s" % exc
+        )
+    if not record:
+        return None
+    now = time.time()
+    if now - record["last_activity"] > VAULT_INACTIVITY_SECONDS:
+        backend.delete(session_id)
+        return None
+    if user_id is not None and record.get("user_id") != user_id:
+        logger.warning("Vault VMK store: user binding mismatch for a session "
+                       "(requested by user %s) — access denied", user_id)
+        return None
+    record["last_activity"] = now
+    backend.touch(session_id, now)
+    return record["vmk"]
+
+def _store_vmk(session_id, vmk, user_id):
+    """Store the VMK bound to the owning user id, with current timestamp.
+
+    Raises _VMKStoreUnavailable when REDIS_URL is configured but Redis is
+    unreachable — unlock() refuses to report success without a durable
+    shared entry (fail-closed), never falls back to per-process memory.
+    """
+    now = time.time()
+    try:
+        _get_vmk_backend().put(session_id, {
+            "user_id": user_id,
+            "vmk": vmk,
+            "created": now,
+            "last_activity": now,
+        })
+    except _VMKStoreUnavailable:
+        raise
+    except Exception as exc:
+        raise _VMKStoreUnavailable(
+            "shared VMK store write failed: %s" % exc
+        )
 
 def _remove_vmk_from_store(session_id):
-    """Remove VMK from store."""
-    with _vmk_store_lock:
-        if session_id in _vmk_store:
-            del _vmk_store[session_id]
+    """Remove the VMK entry (lock, or explicit invalidation).
+
+    Best-effort: lock must still clear the in-session unlock state even if
+    the shared store blips; a missed delete self-heals via the TTL.
+    """
+    if not session_id:
+        return
+    try:
+        _get_vmk_backend().delete(session_id)
+    except Exception as exc:
+        logger.warning("Vault VMK store: delete on lock failed (%s); the TTL "
+                       "self-heals the window", exc)
 
 def _update_vmk_activity(session_id):
-    """Update the last activity time for the VMK entry."""
-    with _vmk_store_lock:
-        if session_id in _vmk_store:
-            _vmk_store[session_id]['last_activity'] = time.time()
+    """Update the last activity time for the VMK entry.
+
+    Best-effort: a store blip here only risks an early TTL expiry (which is
+    the auto-lock semantic anyway), so it must not break an in-flight read.
+    """
+    if not session_id:
+        return
+    try:
+        _get_vmk_backend().touch(session_id, time.time())
+    except Exception as exc:
+        logger.warning("Vault VMK store: activity touch failed (%s)", exc)
 
 # ---------------------------------------------------------------------------
 # Cryptographic helpers
@@ -476,9 +681,16 @@ def unlock():
         settings["vmk_wrap_tag"],
         wrapping_key,
     )
-    # Store VMK in memory keyed by session ID
+    # Store VMK in the shared store, bound to this user, keyed by session ID.
+    # If the shared store is unavailable (REDIS_URL set but Redis down) we
+    # MUST NOT report success: the unlock would work on this worker only and
+    # every other gunicorn worker would 403. Fail closed with a 503.
     session_id = session.sid if hasattr(session, 'sid') else str(os.urandom(16))
-    _store_vmk(session_id, vmk)
+    try:
+        _store_vmk(session_id, vmk, user_id=user["id"])
+    except _VMKStoreUnavailable as exc:
+        logger.error("Vault unlock aborted: shared VMK store unavailable (%s)", exc)
+        return jsonify({"success": False, "error": "Vault storage is temporarily unavailable — please try again in a moment"}), 503
     # Also store session ID in Flask session for later reference
     session["vault_session_id"] = session_id
 
@@ -604,9 +816,13 @@ def get_vault_plaintext(file_id, user_id):
         if enc_content is None:
             return None
         session_id = session.get("vault_session_id")
-        vmk = _get_vmk_from_store(session_id)
+        try:
+            vmk = _get_vmk_from_store(session_id, user_id=user_id)
+        except _VMKStoreUnavailable as exc:
+            logger.error("Vault plaintext retrieval aborted: shared VMK store unavailable (%s)", exc)
+            return None
         if vmk is None:
-            logger.warning("VMK not in memory — vault may be locked or expired")
+            logger.warning("VMK not in store — vault may be locked or expired")
             return None
         try:
             dek = _unwrap_key(
@@ -683,8 +899,51 @@ def vault_upload():
         if file_size > max_size:
             return jsonify({"success": False, "error": f"File exceeds the {max_size // (1024*1024)} MB upload limit"}), 413
 
-        from storage_db import create_file_record, vault_file, move_file_to_folder, get_user_file_record as _get_user_file_record
-        upload_result = cached.send_file(temp_path, caption="Vault upload")
+        from storage_db import create_file_record, vault_file, move_file_to_folder, get_user_file_record as _get_user_file_record, update_file_encryption
+
+        # ------------------------------------------------------------------
+        # Single-round-trip vault upload: encrypt the plaintext we already
+        # have IN MEMORY, then upload ONLY the ciphertext to Telegram.
+        # The previous flow uploaded plaintext → downloaded it back →
+        # encrypted → re-uploaded, i.e. 4 sequential Telegram round-trips
+        # inside one request, which on production (multi-worker gunicorn,
+        # remote Telegram) exceeded the request budget and produced empty
+        # responses the browser surfaced as "Unexpected end of JSON input".
+        # Crypto is IDENTICAL to _encrypt_and_vault_file: fresh DEK,
+        # AES-256-GCM file encryption, DEK wrapped with the session VMK.
+        # ------------------------------------------------------------------
+        with open(temp_path, "rb") as f:
+            plain_content = f.read()
+
+        session_id = session.get("vault_session_id")
+        try:
+            vmk = _get_vmk_from_store(session_id, user_id=user["id"])
+        except _VMKStoreUnavailable as exc:
+            logger.error("Vault upload aborted: shared VMK store unavailable (%s)", exc)
+            return jsonify({"success": False, "error": "Vault storage is temporarily unavailable — please try again in a moment"}), 503
+        if vmk is None:
+            # VMK must exist in the store while the vault is unlocked; if it is
+            # gone (restart, expiry), force a re-auth instead of storing
+            # an unencrypted record.
+            logger.error("Vault upload: VMK not in store for session")
+            return jsonify({"success": False, "error": "Vault session expired — lock and unlock the Vault, then try again"}), 403
+
+        dek = os.urandom(AESGCM_KEY_LEN)
+        file_enc_nonce, file_enc_cipher, file_enc_tag = _encrypt_file(plain_content, dek)
+        dek_wrap_nonce, dek_wrap_cipher, dek_wrap_tag = _wrap_key(dek, vmk)
+
+        # Write ciphertext to a temp file and upload it. If this fails, no DB
+        # record exists yet — nothing to clean up except the temp file.
+        with tempfile.NamedTemporaryFile(delete=False, dir="uploads", suffix=".enc") as tmp_enc:
+            tmp_enc.write(file_enc_cipher)
+            enc_path = tmp_enc.name
+        try:
+            upload_result = cached.send_file(enc_path, caption=f"Vault: {safe_name}")
+        finally:
+            try:
+                os.unlink(enc_path)
+            except OSError:
+                pass
         if not upload_result or not upload_result.get("message_id"):
             return jsonify({"success": False, "error": "Telegram upload failed"}), 500
 
@@ -696,10 +955,23 @@ def vault_upload():
             size=file_size,
         )
 
-        # Encrypt + vault the file immediately
-        success = _encrypt_and_vault_file(record["id"], user, record)
-        if not success:
-            # Clean up: delete the Telegram message and DB record
+        # Persist encryption metadata + mark vaulted. If this fails, remove
+        # the ciphertext message so no orphaned encrypted blob remains.
+        try:
+            update_file_encryption(
+                file_id=record["id"],
+                user_id=user["id"],
+                enc_version=1,
+                dek_wrap_nonce=dek_wrap_nonce,
+                dek_wrap_cipher=dek_wrap_cipher,
+                dek_wrap_tag=dek_wrap_tag,
+                file_enc_nonce=file_enc_nonce,
+                file_enc_tag=file_enc_tag,
+                enc_flag=1,
+            )
+            vault_file(record["id"], user["id"])
+        except Exception:
+            logger.exception("Vault upload: metadata persistence failed")
             try:
                 cached.delete_message(upload_result["message_id"])
             except Exception:
@@ -709,7 +981,6 @@ def vault_upload():
                 conn.execute("DELETE FROM file_records WHERE id = ? AND user_id = ?",
                              (record["id"], user["id"]))
             return jsonify({"success": False, "error": "Failed to encrypt file for Vault"}), 500
-        vault_file(record["id"], user["id"])
 
         # Optional folder placement
         folder_id = request.form.get("folder_id") or request.args.get("folder_id")
@@ -871,9 +1142,13 @@ def _encrypt_and_vault_file(file_id, user, record):
     file_enc_nonce, file_enc_cipher, file_enc_tag = _encrypt_file(plain_content, dek)
     # Get the VMK from memory
     session_id = session.get("vault_session_id")
-    vmk = _get_vmk_from_store(session_id)
+    try:
+        vmk = _get_vmk_from_store(session_id, user_id=user["id"])
+    except _VMKStoreUnavailable as exc:
+        logger.error("Vault encryption aborted: shared VMK store unavailable (%s)", exc)
+        return False
     if vmk is None:
-        logger.error("VMK not found in memory")
+        logger.error("VMK not found in store")
         return False
     # Wrap the DEK with the VMK
     dek_wrap_nonce, dek_wrap_cipher, dek_wrap_tag = _wrap_key(dek, vmk)
@@ -1000,9 +1275,13 @@ def _decrypt_and_unvault_file(file_id, user, record):
 
     # Get the VMK from memory
     session_id = session.get("vault_session_id")
-    vmk = _get_vmk_from_store(session_id)
+    try:
+        vmk = _get_vmk_from_store(session_id, user_id=user["id"])
+    except _VMKStoreUnavailable as exc:
+        logger.error("Vault decryption aborted: shared VMK store unavailable (%s)", exc)
+        return False
     if vmk is None:
-        logger.error("VMK not found in memory")
+        logger.error("VMK not found in store")
         return False
 
     # Unwrap the DEK with the VMK

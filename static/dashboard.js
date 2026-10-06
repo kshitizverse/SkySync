@@ -711,10 +711,20 @@ async function refreshFiles() {
 }
 
 async function fetchJSON(url, options) {
+  // Safe parse: a non-JSON response (empty body, HTML error page from a
+  // proxy, gateway timeout) must never surface as the cryptic
+  // "Unexpected end of JSON input". Read as text first, then try JSON.
   const response = await fetch(url, options);
-  const data = await response.json();
-  if (!response.ok || !data.success) {
-    throw new Error(data.error?.message || data.error || 'Request failed');
+  const text = await response.text();
+  let data = null;
+  if (text) {
+    try { data = JSON.parse(text); } catch (e) { /* non-JSON body */ }
+  }
+  if (!response.ok || !data || data.success === false) {
+    if (data && (data.error?.message || data.error)) {
+      throw new Error(data.error.message || data.error);
+    }
+    throw new Error('Server returned HTTP ' + response.status + '. Please try again.');
   }
   return data;
 }

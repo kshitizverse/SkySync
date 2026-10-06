@@ -17,6 +17,30 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Vault access control helpers (fail-closed)
+
+
+def _vault_gate(user_id, *, locked_msg="Vault is locked"):
+    """Raise DAVError(403) unless the vault is verifiably unlocked.
+
+    WebDAV requests are served by the DAV middleware OUTSIDE Flask's request
+    context, so flask session access raises RuntimeError and the vault can
+    never present an unlock on this path. Treat that (and any unexpected
+    error) as LOCKED: fail-closed. Never wrap this call in try/except
+    Exception — that would swallow the 403 and defeat the check.
+    """
+    from wsgidav.dav_provider import DAVError
+    try:
+        from vault import vault_is_unlocked
+        unlocked = vault_is_unlocked(user_id)
+    except Exception:
+        unlocked = False
+    if not unlocked:
+        raise DAVError(403, locked_msg)
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -31,6 +55,23 @@ def _record_activity(user_id, event_type, resource_type=None, resource_id=None, 
         _rec(user_id, event_type, resource_type=resource_type, resource_id=resource_id, metadata=metadata)
     except Exception:
         pass
+
+
+def _resolve_folder_id(parent_parts, user_id):
+    """Walk parent_parts from the user's storage root; return folder id or None."""
+    if not parent_parts:
+        return None
+    from storage_db import list_user_folders
+    current = None
+    for part in parent_parts:
+        subs = list_user_folders(user_id, parent_id=current)
+        for sf in subs:
+            if sf["name"] == part:
+                current = sf["id"]
+                break
+        else:
+            return None
+    return current
 
 
 def _parse_webdav_path(path):
@@ -202,13 +243,7 @@ class SkySyncFolder(DAVCollection):
             raise DAVError(403, "Forbidden")
         # Check if parent folder is vaulted and locked
         if self._folder and self._folder.get("is_vaulted"):
-            try:
-                from vault import vault_is_unlocked
-                if not vault_is_unlocked(user_id):
-                    from wsgidav.dav_provider import DAVError
-                    raise DAVError(403, "Vault is locked")
-            except Exception:
-                pass
+            _vault_gate(user_id)
         from storage_db import create_folder, log_activity
         parent_id = self._folder["id"] if self._folder else None
         create_folder(user_id, name, parent_id=parent_id)
@@ -228,13 +263,7 @@ class SkySyncFolder(DAVCollection):
             raise DAVError(403, "Forbidden")
         # Check if parent folder is vaulted and locked
         if self._folder and self._folder.get("is_vaulted"):
-            try:
-                from vault import vault_is_unlocked
-                if not vault_is_unlocked(user_id):
-                    from wsgidav.dav_provider import DAVError
-                    raise DAVError(403, "Vault is locked")
-            except Exception:
-                pass
+            _vault_gate(user_id)
         from storage_db import log_activity
         log_activity(user_id, "webdav_create_empty", detail=name)
         folder_id = self._folder["id"] if self._folder else None
@@ -250,13 +279,7 @@ class SkySyncFolder(DAVCollection):
             raise DAVError(403, "Cannot delete root")
 
         if self._folder.get("is_vaulted"):
-            try:
-                from vault import vault_is_unlocked
-                if not vault_is_unlocked(user_id):
-                    from wsgidav.dav_provider import DAVError
-                    raise DAVError(403, "Vault is locked")
-            except Exception:
-                pass
+            _vault_gate(user_id)
 
         from storage_db import soft_delete_folder, log_activity
         try:
@@ -275,13 +298,7 @@ class SkySyncFolder(DAVCollection):
             raise DAVError(403, "Cannot move root")
 
         if self._folder.get("is_vaulted"):
-            try:
-                from vault import vault_is_unlocked
-                if not vault_is_unlocked(user_id):
-                    from wsgidav.dav_provider import DAVError
-                    raise DAVError(403, "Vault is locked")
-            except Exception:
-                pass
+            _vault_gate(user_id)
 
         _, new_name = _parse_webdav_path(dest_path)
         if not new_name or not _safe_webdav_name(new_name):
@@ -296,9 +313,24 @@ class SkySyncFolder(DAVCollection):
     def copy_move_single(self, dest_path, *, is_move):
         if is_move:
             return self.handle_move(dest_path)
-        else:
+        # --- COPY of a collection (non-recursive; WsgiDAV copies members) ---
+        user_id = _user_id_from_environ(self.environ)
+        if not user_id or not self._folder:
             from wsgidav.dav_provider import DAVError
-            raise DAVError(405, "Copy not supported for folders")
+            raise DAVError(403, "Cannot copy root")
+        if self._folder.get("is_vaulted"):
+            _vault_gate(user_id)
+        _, new_name = _parse_webdav_path(dest_path)
+        if not new_name or not _safe_webdav_name(new_name):
+            from wsgidav.dav_provider import DAVError
+            raise DAVError(400, "Invalid destination name")
+        from storage_db import create_folder, log_activity
+        parent_parts, _ = _parse_webdav_path(dest_path)
+        parent_id = _resolve_folder_id(parent_parts, user_id)
+        create_folder(user_id, new_name, parent_id=parent_id)
+        log_activity(user_id, "webdav_copy_folder", detail=new_name)
+        _record_activity(user_id, "WEBDAV_COPY", resource_type="folder", metadata={"name": new_name})
+        return True
 
     def support_recursive_move(self, dest_path):
         return True
@@ -367,55 +399,25 @@ class SkySyncFile(DAVNonCollection):
             return io.BytesIO(b"")
 
         if self._record.get("is_vaulted"):
-            try:
-                from vault import vault_is_unlocked
-                if not vault_is_unlocked(user_id):
-                    from wsgidav.dav_provider import DAVError
-                    raise DAVError(403, "Vault is locked")
-            except Exception:
-                pass
+            # Fail-closed: serve vaulted content ONLY while the vault is
+            # unlocked. (The old check raised inside try/except Exception,
+            # which swallowed the 403 and disabled the check entirely.)
+            _vault_gate(user_id)
 
-        from storage_db import get_user_by_id
-        from telegram_handler import create_telegram_handler_for_user
-        user = get_user_by_id(user_id)
-        if not user:
-            return io.BytesIO(b"")
-        cached = create_telegram_handler_for_user(user)
-        if not cached:
-            return io.BytesIO(b"")
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".tmp")
-        tmp_path = tmp.name
-        tmp.close()
-        try:
-            success = _run_telegram_op(
-                cached,
-                cached.handler.download_file(self._record["telegram_message_id"], tmp_path),
-            )
-            if not success:
-                return io.BytesIO(b"")
-            with open(tmp_path, "rb") as f:
-                data = f.read()
-            _record_activity(user_id, "WEBDAV_DOWNLOAD", resource_type="file", resource_id=self._record.get("id"), metadata={"filename": self._record.get("filename")})
-            return io.BytesIO(data)
-        except Exception as exc:
-            logger.error("WebDAV download failed: %s", exc)
-            return io.BytesIO(b"")
-        finally:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+        # get_vault_plaintext downloads from Telegram and, for vaulted files
+        # (enc_flag=1), decrypts via VMK -> DEK. Never serves raw ciphertext.
+        from vault import get_vault_plaintext
+        data = get_vault_plaintext(self._record["id"], user_id)
+        if data is None:
+            from wsgidav.dav_provider import DAVError
+            raise DAVError(502, "Download from storage backend failed — please retry.")
+        _record_activity(user_id, "WEBDAV_DOWNLOAD", resource_type="file", resource_id=self._record.get("id"), metadata={"filename": self._record.get("filename")})
+        return io.BytesIO(data)
 
     def begin_write(self, *, content_type=None):
         user_id = _user_id_from_environ(self.environ)
         if self._record and self._record.get("is_vaulted"):
-            try:
-                from vault import vault_is_unlocked
-                if not vault_is_unlocked(user_id):
-                    from wsgidav.dav_provider import DAVError
-                    raise DAVError(403, "Vault is locked")
-            except Exception:
-                pass
+            _vault_gate(user_id)
         self._tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".webdav_upload")
         self._content_type = content_type
         return self._tmp_file
@@ -456,7 +458,8 @@ class SkySyncFile(DAVNonCollection):
                 os.unlink(tmp_path)
             except OSError:
                 pass
-            return
+            from wsgidav.dav_provider import DAVError
+            raise DAVError(502, "Storage backend unavailable — please retry.")
         filename = self._record.get("filename", os.path.basename(tmp_path)) if self._record else os.path.basename(tmp_path)
         size = os.path.getsize(tmp_path)
         t_start = time.monotonic()
@@ -477,7 +480,11 @@ class SkySyncFile(DAVNonCollection):
         except OSError:
             pass
         if not result:
-            return
+            # Do NOT answer 201 after a failed upload: without a Telegram
+            # message there is no file, and the client would believe the
+            # data was stored. Surface a real error instead.
+            from wsgidav.dav_provider import DAVError
+            raise DAVError(502, "Upload to storage backend failed — please retry.")
         record = create_file_record(
             user_id=user_id,
             telegram_message_id=result["message_id"],
@@ -498,13 +505,7 @@ class SkySyncFile(DAVNonCollection):
             raise DAVError(403, "Cannot delete")
 
         if self._record.get("is_vaulted"):
-            try:
-                from vault import vault_is_unlocked
-                if not vault_is_unlocked(user_id):
-                    from wsgidav.dav_provider import DAVError
-                    raise DAVError(403, "Vault is locked")
-            except Exception:
-                pass
+            _vault_gate(user_id)
 
         from storage_db import soft_delete_file, log_activity
         soft_delete_file(self._record["id"], user_id)
@@ -518,13 +519,7 @@ class SkySyncFile(DAVNonCollection):
             raise DAVError(403, "Cannot move")
 
         if self._record.get("is_vaulted"):
-            try:
-                from vault import vault_is_unlocked
-                if not vault_is_unlocked(user_id):
-                    from wsgidav.dav_provider import DAVError
-                    raise DAVError(403, "Vault is locked")
-            except Exception:
-                pass
+            _vault_gate(user_id)
 
         _, new_name = _parse_webdav_path(dest_path)
         if not new_name or not _safe_webdav_name(new_name):
@@ -540,18 +535,86 @@ class SkySyncFile(DAVNonCollection):
     def copy_move_single(self, dest_path, *, is_move):
         if is_move:
             return self.handle_move(dest_path)
-        else:
+        # --- COPY of a file ---
+        user_id = _user_id_from_environ(self.environ)
+        if not user_id or not self._record or not self._record.get("id"):
             from wsgidav.dav_provider import DAVError
-            raise DAVError(405, "Copy not supported")
+            raise DAVError(403, "Cannot copy")
+        src = self._record
+        if src.get("is_vaulted"):
+            # Fail-closed: vaulted files are never accessible via WebDAV
+            # tokens (the DAV path has no browser session, so the vault can
+            # never present an unlock here). Copying one out would create a
+            # plaintext twin outside the Vault.
+            _vault_gate(user_id)
+        _, new_name = _parse_webdav_path(dest_path)
+        if not new_name or not _safe_webdav_name(new_name):
+            from wsgidav.dav_provider import DAVError
+            raise DAVError(400, "Invalid destination name")
 
-    def support_recursive_move(self, dest_path):
-        return True
+        from storage_db import (
+            get_user_by_id, create_file_record,
+            move_file_to_folder, log_activity,
+        )
+        from telegram_handler import create_telegram_handler_for_user
+        from vault import _download_from_telegram
 
-    def move_recursive(self, dest_path):
-        return self.handle_move(dest_path)
+        user = get_user_by_id(user_id)
+        cached = create_telegram_handler_for_user(user) if user else None
+        if not cached:
+            from wsgidav.dav_provider import DAVError
+            raise DAVError(502, "Storage backend unavailable — please retry.")
 
-    def handle_delete(self):
-        self.delete()
+        # Read source bytes from Telegram. The gate above guarantees the
+        # source is a plain (non-vaulted) file at this point.
+        data = _download_from_telegram(cached, src["telegram_message_id"])
+        if data is None:
+            from wsgidav.dav_provider import DAVError
+            raise DAVError(502, "Copy failed: source could not be read.")
+
+        # Single upload of the copy. Never encrypt here: the destination is
+        # by definition outside the Vault's encrypted set.
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".webdav_copy")
+        tmp_path = tmp.name
+        tmp.close()
+        try:
+            with open(tmp_path, "wb") as f:
+                f.write(data)
+            result = _run_telegram_op(
+                cached,
+                cached.handler.send_file(tmp_path, caption=f"WebDAV copy: {new_name}"),
+            )
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+        if not result:
+            from wsgidav.dav_provider import DAVError
+            raise DAVError(502, "Copy failed: upload to storage backend failed — please retry.")
+
+        record = create_file_record(
+            user_id=user_id,
+            telegram_message_id=result["message_id"],
+            filename=new_name,
+            mime_type=src.get("mime_type") or "application/octet-stream",
+            size=len(data),
+        )
+        if not record:
+            # Orphan Telegram message: best-effort cleanup
+            try:
+                _run_telegram_op(cached, cached.handler.delete_message(result["message_id"]))
+            except Exception:
+                logger.warning("Copy cleanup: could not delete orphan Telegram message %s", result["message_id"])
+            from wsgidav.dav_provider import DAVError
+            raise DAVError(500, "Copy failed: could not create file record.")
+
+        parent_parts, _name_again = _parse_webdav_path(dest_path)
+        folder_id = _resolve_folder_id(parent_parts, user_id)
+        if folder_id is not None:
+            move_file_to_folder(record["id"], user_id, folder_id)
+        log_activity(user_id, "webdav_copy_file", detail=new_name)
+        _record_activity(user_id, "WEBDAV_COPY", resource_type="file", resource_id=record["id"], metadata={"filename": new_name, "size": len(data)})
         return True
 
 
@@ -593,6 +656,10 @@ class SkySyncDAVProvider(DAVProvider):
             found = False
             for sf in subfolders:
                 if sf["name"] == part:
+                    if sf.get("is_vaulted"):
+                        # Fail-closed: no access through a vaulted folder
+                        # while it is locked.
+                        _vault_gate(user_id)
                     current_folder_id = sf["id"]
                     found = True
                     break
@@ -603,12 +670,36 @@ class SkySyncDAVProvider(DAVProvider):
         subfolders = list_user_folders(user_id, parent_id=current_folder_id)
         for sf in subfolders:
             if sf["name"] == name:
+                if sf.get("is_vaulted"):
+                    _vault_gate(user_id)
                 return SkySyncFolder(path, environ, sf)
 
         files = list_user_files(user_id)
         for f in files:
             if f["filename"] == name and (f.get("folder_id") == current_folder_id or (current_folder_id is None and not f.get("folder_id"))):
+                if f.get("is_vaulted"):
+                    # Fail-closed: direct PUT/DELETE/MOVE against a vaulted item
+                    # must not bypass the Vault lock via this lookup path
+                    # (get_member has its own check; keep the two in sync).
+                    _vault_gate(user_id)
                 return SkySyncFile(path, environ, f)
+
+        # RFC 4918 lock-null: WsgiDAV creates a transient empty resource when
+        # LOCKing an unmapped URL, then re-resolves it while building the
+        # {DAV:}lockdiscovery property. Returning None here crashes
+        # WsgiDAV's lockdiscovery builder (dav_provider.py has a literal
+        # 'FIXME: test for None'), so surface a locked-but-unmapped URL as an
+        # empty transient file. It disappears again once the lock is released.
+        if self.lock_manager is not None and self.lock_manager.is_url_locked(path):
+            file_record = {
+                "id": None,
+                "filename": name,
+                "folder_id": current_folder_id,
+                "size": 0,
+                "mime_type": None,
+                "uploaded_at": datetime.now(timezone.utc).isoformat(),
+            }
+            return SkySyncFile(path, environ, file_record)
 
         return None
 

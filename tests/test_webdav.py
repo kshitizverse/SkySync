@@ -93,9 +93,13 @@ class TestWebDavAuth(WebDAVTestBase):
         self.assertEqual(r.status_code, 401)
 
     def test_valid_token_gets_207(self):
+        # Must be a real 207 Multi-Status with a non-empty XML body.
+        # (A bare 200 with empty body would be the WsgiDAV asterisk-OPTIONS
+        # branch misfiring — see main.py hotfixes note.)
         r = self.client.open("/webdav/", method="PROPFIND",
                              headers=_auth_header(self.user_a["id"], self.token_a))
-        self.assertIn(r.status_code, (200, 207))
+        self.assertEqual(r.status_code, 207)
+        self.assertTrue(r.data.strip(), "PROPFIND 207 must not have an empty body")
 
     def test_invalid_token_returns_401(self):
         r = self.client.get("/webdav/", headers=_auth_header(self.user_a["id"], "invalid-token"))
@@ -177,9 +181,10 @@ class TestWebDavFileOperations(WebDAVTestBase):
             content_type="text/plain",
             headers=_auth_header(self.user_a["id"], self.token_a),
         )
-        # PUT returns 201 at WsgiDAV level; DB record may not exist
-        # in test mode because Telegram handler has no valid session.
-        self.assertIn(r.status_code, (201, 204, 500))
+        # 201/204 when the Telegram upload succeeds; 502 when the storage
+        # backend is unavailable (end_write now fails honestly instead of
+        # answering 201 without creating a file record).
+        self.assertIn(r.status_code, (201, 204, 502))
 
     def test_propfind_lists_files(self):
         create_folder(self.user_a["id"], "Docs")

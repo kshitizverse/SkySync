@@ -245,9 +245,18 @@ def _setup_webdav():
             "logging": {
                 "enable": False,
             },
+            # Windows Explorer (WebClient) requires the MS-Author-Via: DAV
+            # response header on OPTIONS before it will accept the location.
+            "add_header_MS_Author_Via": True,
             "hotfixes": {
                 "winxp_accept_root_share_login": True,
                 "win_accept_anonymous_options": True,
+                # NOTE: do NOT enable 'treat_root_options_as_asterisk'.
+                # In WsgiDAV 4.3.x the hotfix sets is_asterisk_options=True for
+                # EVERY method on the collection root (not just OPTIONS), so
+                # PROPFIND/GET on /webdav/ would get an empty 200 OK and
+                # Windows Explorer would see no folder contents.
+                # OPTIONS /webdav/* is already answered by our middleware.
             },
             "middleware_stack": [
                 "wsgidav.error_printer.ErrorPrinter",
@@ -311,6 +320,20 @@ def _setup_webdav():
                 if path == self.prefix or path.startswith(self.prefix + "/"):
                     environ["SCRIPT_NAME"] = self.prefix
                     environ["PATH_INFO"] = path[len(self.prefix):]
+                    # Windows Explorer issues 'OPTIONS /webdav/' as its very
+                    # first probe. Flask's auto-OPTIONS would answer 404 for
+                    # this non-registered path (breaking the wizard with
+                    # "folder does not appear to be valid"), so we answer the
+                    # RFC 4918 capability headers HERE, before Flask sees it.
+                    if method == "OPTIONS":
+                        start_response("200 OK", [
+                            ("DAV", "1,2"),
+                            ("Allow", "OPTIONS, GET, HEAD, PUT, DELETE, PROPFIND, PROPPATCH, MKCOL, COPY, MOVE, LOCK, UNLOCK"),
+                            ("MS-Author-Via", "DAV"),
+                            ("Content-Length", "0"),
+                            ("Date", __import__("wsgidav.util", fromlist=["util"]).get_rfc1123_time()),
+                        ])
+                        return [b""]
                     _r = self.dav_app(environ, start_response)
                     return _r
                 return self.wsgi_app(environ, start_response)
