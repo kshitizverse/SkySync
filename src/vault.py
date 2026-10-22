@@ -54,7 +54,7 @@ vault_bp = Blueprint("vault", __name__)
 
 PIN_MIN_LENGTH = 4
 PIN_MAX_LENGTH = 128
-VAULT_INACTIVITY_SECONDS = 300  # 5 minutes — configurable via env
+VAULT_INACTIVITY_SECONDS = 300  # keepalive window — see vault_is_unlocked
 # Argon2id parameters for KDF (from the design)
 ARGON2_MEMORY_COST = 64  # MB
 ARGON2_TIME_COST = 3     # iterations
@@ -465,7 +465,16 @@ def vault_lock():
     session.pop("vault_last_activity", None)
 
 def vault_is_unlocked(user_id):
-    """Check whether the Vault is currently unlocked AND not expired."""
+    """Check whether the Vault session is currently unlocked and fresh.
+
+    The 5-minute window is NOT a user-facing inactivity auto-lock: it is a
+    server-side liveness/fail-closed bound for the unlocked state, kept
+    fresh by (a) every Vault API call and (b) the dashboard's vault-open
+    keepalive while the user is inside the Vault view. Leaving the Vault,
+    locking, logout, or closing the tab stops the keepalive, so the window
+    ages out and every later check fails closed. A session whose timestamp
+    is malformed is treated as expired (fail-closed).
+    """
     if not session.get("vault_unlocked"):
         return False
     last_activity = session.get("vault_last_activity")
@@ -480,7 +489,7 @@ def vault_is_unlocked(user_id):
     except (ValueError, TypeError):
         vault_lock()
         return False
-    # Refresh activity timestamp on successful check
+    # Refresh the freshness window on every verified check
     session["vault_last_activity"] = utcnow_iso()
     return True
 

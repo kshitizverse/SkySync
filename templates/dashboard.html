@@ -241,61 +241,10 @@
             <p id="share-modal-filemeta" class="share-modal-filemeta"></p>
           </div>
           <form id="share-form">
-            <div class="share-section">
-              <div class="share-section-label">Permissions</div>
-              <div class="share-check-group">
-                <label class="checkbox-label">
-                  <input type="checkbox" id="share-can-view" checked> Allow viewing
-                </label>
-                <label class="checkbox-label">
-                  <input type="checkbox" id="share-can-download" checked> Allow downloading
-                </label>
-              </div>
-            </div>
-            <div class="share-divider"></div>
-            <div class="share-section">
-              <div class="share-section-label">Security</div>
-              <div class="share-check-group">
-                <label class="checkbox-label">
-                  <input type="checkbox" id="share-require-password"> Require password
-                </label>
-                <label class="checkbox-label">
-                  <input type="checkbox" id="share-one-time"> One-time link
-                </label>
-              </div>
-            </div>
-            <div class="form-group" id="share-password-group" hidden>
-              <label>Password</label>
-              <input type="password" id="share-password" placeholder="Enter password" maxlength="128" autocomplete="off" aria-label="Share password">
-            </div>
-            <div class="share-section">
-              <div class="share-section-label">Expiration</div>
-              <div class="share-radio-group">
-                <label class="share-radio"><input type="radio" name="share-expiry" value="" checked> Never</label>
-                <label class="share-radio"><input type="radio" name="share-expiry" value="1d"> 1 day</label>
-                <label class="share-radio"><input type="radio" name="share-expiry" value="7d"> 7 days</label>
-                <label class="share-radio"><input type="radio" name="share-expiry" value="30d"> 30 days</label>
-                <label class="share-radio"><input type="radio" name="share-expiry" value="custom"> Custom</label>
-              </div>
-            </div>
-            <div class="form-group" id="share-custom-expiry-group" hidden>
-              <label>Custom Expiration</label>
-              <input type="datetime-local" id="share-custom-expiry" aria-label="Custom expiration date">
-            </div>
-            <div class="share-section">
-              <div class="share-section-label">Download limit</div>
-              <div class="share-radio-group">
-                <label class="share-radio"><input type="radio" name="share-dlimit" value="" checked> Unlimited</label>
-                <label class="share-radio"><input type="radio" name="share-dlimit" value="1"> 1</label>
-                <label class="share-radio"><input type="radio" name="share-dlimit" value="5"> 5</label>
-                <label class="share-radio"><input type="radio" name="share-dlimit" value="10"> 10</label>
-                <label class="share-radio"><input type="radio" name="share-dlimit" value="custom"> Custom</label>
-              </div>
-            </div>
-            <div class="form-group" id="share-dlimit-custom-group" hidden>
-              <label>Custom download limit</label>
-              <input type="number" id="share-dlimit-custom" min="1" max="10000" placeholder="Max downloads" aria-label="Custom download limit">
-            </div>
+            <!-- Simplified share flow: advanced options (permissions,
+                 password, one-time link, expiration, download limit) are no
+                 longer exposed in the modal. The client sends the standard
+                 defaults; the server still validates everything. -->
             <div class="share-result" id="share-result" hidden>
               <div class="share-result-header">&#10003; Share created</div>
               <div class="share-result-url">
@@ -414,14 +363,9 @@
                 <span class="vault-header-subtitle" id="vault-header-subtitle">Private &amp; encrypted</span>
               </div>
             </div>
-            <div class="vault-autolock-indicator" id="vault-autolock-indicator" title="Vault auto-locks after 5 minutes of inactivity">
-              <span class="autolock-label">Auto-lock</span>
-              <span class="autolock-timer" id="vault-autolock-timer">05:00</span>
-            </div>
           </div>
           <div class="vault-toolbar-actions">
             <button class="soft-btn" id="vault-back-btn" type="button">← Back to My Drive</button>
-            <button class="soft-btn danger-btn" id="vault-lock-btn" type="button">&#128274; Lock</button>
           </div>
         </section>
         <section class="status-strip" id="vault-status-strip">

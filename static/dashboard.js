@@ -347,32 +347,6 @@ function setupEventListeners() {
   document.getElementById('copy-share-btn').addEventListener('click', copyShareUrl);
   var shareRevokeBtn = document.getElementById('share-revoke-btn');
   if (shareRevokeBtn) shareRevokeBtn.addEventListener('click', revokeShareFromModal);
-  var shareDlimitCustomRadio = document.querySelector('input[name="share-dlimit"][value="custom"]');
-  if (shareDlimitCustomRadio) {
-    shareDlimitCustomRadio.addEventListener('change', function() {
-      document.getElementById('share-dlimit-custom-group').hidden = this.value !== 'custom';
-      if (this.value === 'custom') document.getElementById('share-dlimit-custom').focus();
-    });
-  }
-  var shareRequirePassword = document.getElementById('share-require-password');
-  if (shareRequirePassword) {
-    shareRequirePassword.addEventListener('change', function() {
-      var pwdGroup = document.getElementById('share-password-group');
-      if (pwdGroup) pwdGroup.hidden = !this.checked;
-      if (this.checked) {
-        var pwdInput = document.getElementById('share-password');
-        if (pwdInput) pwdInput.focus();
-      }
-    });
-  }
-  document.querySelectorAll('input[name="share-expiry"]').forEach(function(radio) {
-    radio.addEventListener('change', function() {
-      document.getElementById('share-custom-expiry-group').hidden = this.value !== 'custom';
-      if (this.value === 'custom') {
-        document.getElementById('share-custom-expiry').focus();
-      }
-    });
-  });
   document.getElementById('mobile-menu-btn').addEventListener('click', toggleSidebar);
   document.getElementById('sidebar-close-btn').addEventListener('click', closeSidebar);
   document.getElementById('upload-panel-close').addEventListener('click', () => {
@@ -1047,17 +1021,10 @@ function handleFileAction(action, file) {
       document.getElementById('share-modal-filename').textContent = escapeHtml(file.name);
       var shareMetaEl = document.getElementById('share-modal-filemeta');
       if (shareMetaEl) shareMetaEl.textContent = formatTypeLabel(file.type) + ' \u00B7 ' + formatSize(file.size || 0);
+      document.getElementById('share-form').reset();
       document.getElementById('create-share-btn').hidden = false;
       var shareRevokeBtn2 = document.getElementById('share-revoke-btn');
       if (shareRevokeBtn2) shareRevokeBtn2.hidden = true;
-      var shareForm = document.getElementById('share-form');
-      shareForm.reset();
-      var sharePwdGroup = document.getElementById('share-password-group');
-      if (sharePwdGroup) sharePwdGroup.hidden = true;
-      var shareCustomGroup = document.getElementById('share-custom-expiry-group');
-      if (shareCustomGroup) shareCustomGroup.hidden = true;
-      var shareDlimitGroup = document.getElementById('share-dlimit-custom-group');
-      if (shareDlimitGroup) shareDlimitGroup.hidden = true;
       openModal('share-modal');
       break;
     case 'restore': restoreSingleFile(file); break;
@@ -1240,62 +1207,16 @@ async function toggleFavorite(file) {
 async function submitShare(event) {
   event.preventDefault();
   if (!state.shareTarget) return;
-  var expiryRadio = document.querySelector('input[name="share-expiry"]:checked');
-  const expiry = expiryRadio ? expiryRadio.value : '';
-  const canDownload = document.getElementById('share-can-download').checked;
-  const requirePasswordEl = document.getElementById('share-require-password');
-  const requirePassword = requirePasswordEl ? requirePasswordEl.checked : false;
-  const passwordEl = document.getElementById('share-password');
-  const password = passwordEl ? passwordEl.value : '';
-  const oneTime = document.getElementById('share-one-time').checked;
-  var downloadLimit; // resolved below from the share-dlimit radio group
-
-  let expiresAt = null;
-  if (expiry === '1h') {
-    expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
-  } else if (expiry === '1d') {
-    expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-  } else if (expiry === '7d') {
-    expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-  } else if (expiry === '30d') {
-    expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-  } else if (expiry === 'custom') {
-    const customExpiry = document.getElementById('share-custom-expiry').value;
-    if (customExpiry) {
-      const dt = new Date(customExpiry);
-      if (dt > new Date()) {
-        expiresAt = dt.toISOString();
-      }
-    }
-  }
-
-  // Download limit now arrives via radio group (+ optional custom number).
-  var dlimitRadio = document.querySelector('input[name="share-dlimit"]:checked');
-  var dlimitMode = dlimitRadio ? dlimitRadio.value : '';
-  if (dlimitMode === 'custom') {
-    var customEl = document.getElementById('share-dlimit-custom');
-    downloadLimit = customEl ? customEl.value : '';
-  } else {
-    downloadLimit = dlimitMode;
-  }
-
-  const canViewEl = document.getElementById('share-can-view');
-  const canView = canViewEl ? canViewEl.checked : true;
-
+  // The simplified Share modal exposes no advanced controls. The client sends
+  // the historical modal defaults explicitly (view + download allowed, no
+  // expiry/password/one-time/limit); everything else falls back to the
+  // server's own defaults in create_file_share().
   const body = {
-    can_view: canView,
-    can_download: canDownload,
-    expires_at: expiresAt,
-    one_time: oneTime,
+    can_view: true,
+    can_download: true,
+    expires_at: null,
+    one_time: false,
   };
-
-  if (requirePassword && password) {
-    body.password = password;
-  }
-
-  if (downloadLimit) {
-    body.download_limit = parseInt(downloadLimit);
-  }
 
   var createBtn = document.getElementById('create-share-btn');
   createBtn.disabled = true;
@@ -2615,9 +2536,8 @@ const vaultState = {
   folders: [],
   breadcrumb: [],
   currentFolderId: null,
-  autoLockTimer: null,
-  autoLockSeconds: 300,
-  autoLockRemaining: 300,
+  // Keepalive handle for the vault-open session (see startVaultKeepalive).
+  keepaliveTimer: null,
   search: '',
   sort: 'newest',
 };
@@ -2634,11 +2554,6 @@ function setupVaultEventListeners() {
       e.preventDefault();
       attemptVaultUnlock();
     });
-  }
-
-  var vaultLockBtn = document.getElementById('vault-lock-btn');
-  if (vaultLockBtn) {
-    vaultLockBtn.addEventListener('click', lockVaultConfirm);
   }
 
   var vaultBackBtn = document.getElementById('vault-back-btn');
@@ -3083,13 +2998,14 @@ function goBackToVault() {
 // Does NOTHING when the Vault is not currently unlocked.
 async function leaveVault(targetView) {
   var target = targetView || 'files';
-  stopAutoLockTimer();
+  stopVaultKeepalive();
   if (vaultState.unlocked) {
     vaultState.unlocked = false;
     try {
       await fetchJSON('/api/vault/lock', { method: 'POST' });
-    } catch (e) { /* lock endpoint failure must not block navigation; the
-                      server-side 300 s inactivity window remains the backstop. */ }
+    } catch (e) { /* lock endpoint failure must not block navigation; leaving
+                      the Vault always invalidates the unlocked state and the
+                      next entry requires the PIN. */ }
     // Clear sensitive client-side references immediately (spec section 3).
     vaultState.files = [];
     vaultState.folders = [];
@@ -3265,7 +3181,7 @@ function showVaultUnlocked() {
   hideAllViews();
   document.getElementById('vault-lock-screen').hidden = true;
   document.getElementById('vault-view').hidden = false;
-  startAutoLockTimer();
+  startVaultKeepalive();
 }
 
 async function loadSettingsViewContent() {
@@ -3520,12 +3436,8 @@ async function loadVaultData() {
     vaultState.files = normalizeFiles(result.files || []);
     vaultState.folders = result.folders || [];
     updateVaultNav();
-    // The server refreshed its 5-minute inactivity window on this call — sync
-    // the display-only countdown with it so the indicator does not drift.
-    if (vaultState.unlocked) {
-      vaultState.autoLockRemaining = vaultState.autoLockSeconds;
-      updateAutoLockDisplay();
-    }
+    // The vault-open keepalive refreshed the server-side unlocked window on
+    // this call; the unlocked state itself now lives there.
     renderVaultView();
     if (vaultState.currentFolderId) {
       await loadVaultBreadcrumb(vaultState.currentFolderId);
@@ -3828,23 +3740,10 @@ async function vaultDeleteFolder(folderId, folderName) {
   }
 }
 
-async function lockVaultConfirm() {
-  var ok = await showConfirm('Lock Vault?', 'This will immediately hide your private files.', 'Lock Everything');
-  if (!ok) return;
-  await lockVault();
-}
-
-async function lockVault() {
-  try {
-    await fetchJSON('/api/vault/lock', { method: 'POST' });
-  } catch (e) { /* ignore */ }
-  forceVaultLock();
-}
-
 function forceVaultLock() {
   // LOCKED state per the Vault state machine (NOT_CONFIGURED / LOCKED / UNLOCKED):
   // no Vault files rendered, no Vault actions accessible, PIN screen shown.
-  // Idempotent: safe to call from multiple paths (manual lock, server-forced
+  // Idempotent: safe to call from multiple paths (lock on leave, server-forced
   // re-lock, fetch interceptor). Never calls unlock — that recursion was the
   // historical lock/unlock loop.
   vaultState.unlocked = false;
@@ -3852,7 +3751,7 @@ function forceVaultLock() {
   vaultState.folders = [];
   vaultState.breadcrumb = [];
   vaultState.currentFolderId = null;
-  stopAutoLockTimer();
+  stopVaultKeepalive();
   updateVaultNav();
   if (state.currentView !== 'vault') return; // not viewing Vault: nothing to re-render
   // URL/view consistency: the Vault view is locked — URL must say ?view=vault.
@@ -3860,34 +3759,35 @@ function forceVaultLock() {
   showVaultLockScreen();
 }
 
-function startAutoLockTimer() {
-  // Display-only countdown. The authoritative 5-minute inactivity window is
-  // enforced SERVER-SIDE (src/vault.py vault_is_unlocked, refreshed on every
-  // vault API call); a second client-side lock timer caused unlock/lock loops
-  // when the two timers diverged. Expiry and re-lock are always server-driven,
-  // surfaced through the fetchJSON interceptor → forceVaultLock().
-  stopAutoLockTimer();
-  vaultState.autoLockRemaining = vaultState.autoLockSeconds;
-  updateAutoLockDisplay();
-  vaultState.autoLockTimer = setInterval(function() {
-    vaultState.autoLockRemaining = Math.max(0, vaultState.autoLockRemaining - 1);
-    updateAutoLockDisplay();
-  }, 1000);
+function startVaultKeepalive() {
+  // While the user is in the Vault (unlocked view mounted), refresh the
+  // server-side unlocked window every 2 minutes so an active session is not
+  // expired mid-use. The store's server-side fail-closed TTL remains the
+  // authority: once this keepalive stops (leaving the Vault, lock, logout,
+  // tab close), the window ages out and every check fails closed.
+  stopVaultKeepalive();
+  vaultState.keepaliveTimer = setInterval(function() {
+    if (!vaultState.unlocked) {
+      stopVaultKeepalive();
+      return;
+    }
+    fetch('/api/vault/status', { credentials: 'same-origin' })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(data) {
+        if (!data || !data.unlocked) {
+          // Server says locked/expired: re-lock the UI to match.
+          forceVaultLock();
+        }
+      })
+      .catch(function() { /* transient network error; server remains authority */ });
+  }, 120000);
 }
 
-function stopAutoLockTimer() {
-  if (vaultState.autoLockTimer) {
-    clearInterval(vaultState.autoLockTimer);
-    vaultState.autoLockTimer = null;
+function stopVaultKeepalive() {
+  if (vaultState.keepaliveTimer) {
+    clearInterval(vaultState.keepaliveTimer);
+    vaultState.keepaliveTimer = null;
   }
-}
-
-function updateAutoLockDisplay() {
-  var timerEl = document.getElementById('vault-autolock-timer');
-  if (!timerEl) return;
-  var mins = Math.floor(vaultState.autoLockRemaining / 60);
-  var secs = vaultState.autoLockRemaining % 60;
-  timerEl.textContent = String(mins).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
 }
 
 function navigateToFiles() {
